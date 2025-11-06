@@ -10,6 +10,23 @@ from app.db.models import (
     UserHealthInfo,
 )
 from app.db.session import SessionLocal, engine, get_session
+<<<<<<< HEAD
+=======
+
+__all__ = [
+    "Base",
+    "User",
+    "UserHealthInfo",
+    "MealRecord",
+    "DailyScore",
+    "FoodAnalysis",
+    "ChatMessage",
+    "MealRecommendation",
+    "engine",
+    "SessionLocal",
+    "get_session",
+]
+>>>>>>> 0fc06cfb80a7627348b1a0ff9669bdb9cf8eb34b
 
 __all__ = [
     "Base",

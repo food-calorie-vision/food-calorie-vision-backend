@@ -154,3 +154,7 @@ class MealRecommendation(Base):
 
     def __repr__(self) -> str:
         return f"<MealRecommendation(id={self.id}, user_id={self.user_id}, food_id={self.food_id})>"
+<<<<<<< HEAD
+=======
+
+>>>>>>> 0fc06cfb80a7627348b1a0ff9669bdb9cf8eb34b
