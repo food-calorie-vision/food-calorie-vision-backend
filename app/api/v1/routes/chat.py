@@ -2,10 +2,14 @@
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.session import get_session
 from app.api.v1.schemas.chat import ChatData, ChatRequest
 from app.api.v1.schemas.common import ApiResponse
+from app.services import chat_service
+from app.utils.session import get_current_user_id
 
 router = APIRouter()
 
@@ -40,10 +44,35 @@ def _generate_chat_response(message: str, selected_meal: dict | None) -> str:
 
 
 @router.post("/chat", response_model=ApiResponse[ChatData])
-async def chat(request: ChatRequest) -> ApiResponse[ChatData]:
-    """챗봇 메시지 처리 (메모리 기반 스텁)"""
-    # TODO: 실제 LLM 모델로 대체
-    response_message = _generate_chat_response(request.message, request.selected_meal)
+async def chat(
+    chat_request: ChatRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> ApiResponse[ChatData]:
+    """챗봇 메시지 처리 및 DB 저장"""
+    user_id = get_current_user_id(request)
+    
+    # 로그인된 사용자만 대화 저장
+    if user_id:
+        # 사용자 메시지 저장
+        await chat_service.create_chat_message(
+            session=session,
+            user_id=user_id,
+            role="user",
+            content=chat_request.message,
+        )
+    
+    # 챗봇 응답 생성
+    response_message = _generate_chat_response(chat_request.message, chat_request.selected_meal)
+    
+    # 로그인된 사용자만 챗봇 응답 저장
+    if user_id:
+        await chat_service.create_chat_message(
+            session=session,
+            user_id=user_id,
+            role="assistant",
+            content=response_message,
+        )
 
     return ApiResponse(
         success=True,
@@ -51,5 +80,43 @@ async def chat(request: ChatRequest) -> ApiResponse[ChatData]:
             message=response_message,
             timestamp=datetime.now(timezone.utc).isoformat(),
         ),
+    )
+
+
+@router.get("/chat/history", response_model=ApiResponse[list])
+async def get_chat_history(
+    request: Request,
+    skip: int = 0,
+    limit: int = 50,
+    session: AsyncSession = Depends(get_session),
+) -> ApiResponse[list]:
+    """챗봇 대화 기록 조회"""
+    user_id = get_current_user_id(request)
+    
+    if not user_id:
+        return ApiResponse(
+            success=False,
+            error="로그인이 필요합니다.",
+        )
+    
+    messages = await chat_service.get_user_chat_history(
+        session=session,
+        user_id=user_id,
+        skip=skip,
+        limit=limit,
+    )
+    
+    history = [
+        {
+            "role": msg.role,
+            "content": msg.content,
+            "timestamp": msg.timestamp.isoformat(),
+        }
+        for msg in messages
+    ]
+    
+    return ApiResponse(
+        success=True,
+        data=history,
     )
 
