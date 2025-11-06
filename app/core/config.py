@@ -15,8 +15,18 @@ class Settings(BaseSettings):
     port: int = 8000
     database_url: str = "mysql+asyncmy://fcv_user:password@localhost:3306/food_calorie"
     cors_allow_origins: list[str] = ["*"]
-    jwt_secret: str = "replace-this-secret"
-    jwt_expire_minutes: int = 60
+    
+    # Session settings
+    session_secret_key: str = "replace-this-session-secret-key-in-production"
+    session_cookie_name: str = "fcv_session"
+    session_max_age: int = 3600  # 1 hour in seconds
+    session_https_only: bool = False  # Set to True in production with HTTPS
+    session_same_site: str = "lax"  # lax, strict, or none
+    
+    # Redis settings (optional, for distributed session storage)
+    redis_url: str | None = None  # e.g., "redis://localhost:6379/0"
+    
+    # AI/ML Settings
     openai_api_key: str | None = None
     vision_model_path: str | None = "models/yolo11n.pt"
 
