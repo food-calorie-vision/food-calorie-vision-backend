@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     api_prefix: str = "/api"
     api_version: str = "v1"
     port: int = 8000
-    database_url: str = "mysql+asyncmy://fcv_user:password@localhost:3306/food_calorie"
+    database_url: str = "mysql+asyncmy://root:dufdjwnj@210.125.70.71:32152/tempdb"
     cors_allow_origins: list[str] = ["*"]
     
     # Session settings

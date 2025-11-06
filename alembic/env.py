@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from app.core.config import get_settings
 from app.db import base  # noqa: F401 - ensures models are registered
+from app.db import models  # noqa: F401 - import all models for Alembic
 
 # Interpret the config file for Python logging.
 config = context.config
