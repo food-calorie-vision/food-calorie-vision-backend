@@ -24,11 +24,29 @@ config.set_main_option("sqlalchemy.url", str(settings.database_url))
 
 def include_object(object, name, type_, reflected, compare_to):
     """
-    팀원이 만든 테이블들을 Alembic이 무시하도록 설정
+    Alembic이 무시할 테이블 설정
+    - food_nutrients: 절대 수정 금지
+    - ERDCloud 테이블들: 직접 SQL로 생성
+    - users: Alembic으로 관리 (유일하게 Alembic이 관리하는 테이블)
     """
-    # 팀원이 만든 음식 영양성분 테이블 무시
+    # 절대 수정 금지 테이블
     if type_ == "table" and name == "food_nutrients":
         return False
+    
+    # ERDCloud 스키마 테이블들 (직접 SQL로 생성할 예정)
+    erdcloud_tables = [
+        "Food",
+        "Nutrient", 
+        "UserFoodHistory",
+        "health_score",
+        "HealthReport",
+        "UserPreferences",
+        "disease_allergy_profile"
+    ]
+    if type_ == "table" and name in erdcloud_tables:
+        return False
+    
+    # users 테이블만 Alembic으로 관리
     return True
 
 

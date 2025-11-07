@@ -1,6 +1,4 @@
-"""인증 관련 라우트 (세션 기반)"""
-from datetime import datetime
-
+"""인증 관련 라우트 (세션 기반) - ERDCloud 스키마 기반"""
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,59 +24,24 @@ async def signup(
     session: AsyncSession = Depends(get_session),
 ) -> SignupResponse:
     """
-    회원가입
+    회원가입 (ERDCloud User 테이블 기반)
     
-    사용자 정보와 건강 정보를 함께 등록합니다.
+    - user_id는 DB에서 자동생성 (BIGINT AUTO_INCREMENT)
+    - email과 username은 고유해야 함
     """
-    print(f"[DEBUG] 회원가입 요청 데이터: {signup_data}")  # 디버깅용
+    print(f"[DEBUG] 회원가입 요청 데이터: {signup_data}")
     try:
-        # 생년월일 파싱
-        try:
-            birth_date = datetime.strptime(signup_data.birth_date, "%Y-%m-%d").date()
-        except ValueError:
-            raise HTTPException(status_code=400, detail="생년월일 형식이 올바르지 않습니다. (YYYY-MM-DD)")
-
-        # 사용자 생성
+        # 사용자 생성 (user_id는 자동생성)
         user = await auth_service.create_user(
             session=session,
-            user_id=signup_data.user_id,
-            username=signup_data.nickname,  # username을 nickname으로 사용
-            nickname=signup_data.nickname,
-            password=signup_data.password,
-            gender=signup_data.gender,
-            birth_date=birth_date,
             email=signup_data.email,
-        )
-
-        # 권장 칼로리 계산 (간단한 예시 - 나중에 정교하게 개선)
-        # 남자: 2500, 여자: 2000 기본값
-        base_calories = 2500 if signup_data.gender == "남자" else 2000
-        
-        # 체형 목표에 따라 조정
-        if signup_data.body_type == "감량":
-            recommended_calories = base_calories * 0.8
-        elif signup_data.body_type == "증량":
-            recommended_calories = base_calories * 1.2
-        else:  # 유지
-            recommended_calories = float(base_calories)
-
-        # 건강 정보 생성
-        has_allergy = signup_data.has_allergy == "예"
-        allergies = [signup_data.allergy_info] if has_allergy and signup_data.allergy_info else None
-        diseases = [signup_data.medical_condition] if signup_data.medical_condition else None
-
-        await auth_service.create_user_health_info(
-            session=session,
-            user_id=user.id,
-            goal=signup_data.health_goal,
-            body_type=signup_data.body_type,
-            activity_level="보통",  # 기본값 (나중에 입력받을 수 있음)
-            recommended_calories=recommended_calories,
-            has_allergy=has_allergy,
-            allergy_info=signup_data.allergy_info,
-            medical_condition=signup_data.medical_condition,
-            allergies=allergies,
-            diseases=diseases,
+            username=signup_data.username,
+            password=signup_data.password,
+            nickname=signup_data.nickname,
+            gender=signup_data.gender,
+            age=signup_data.age,
+            weight=signup_data.weight,
+            health_goal=signup_data.health_goal,
         )
 
         # 커밋
@@ -87,7 +50,7 @@ async def signup(
         return SignupResponse(
             success=True,
             message="회원가입이 완료되었습니다.",
-            user_id=signup_data.user_id,
+            user_id=user.user_id,  # 자동생성된 BIGINT ID
         )
 
     except ValueError as e:
@@ -105,27 +68,29 @@ async def login(
     session: AsyncSession = Depends(get_session),
 ) -> LoginResponse:
     """
-    로그인 (세션 기반)
+    로그인 (이메일 기반, 세션 사용)
     
-    DB에서 사용자 인증 후 세션 생성
+    - 이메일과 비밀번호로 인증
+    - 성공 시 세션에 user_id(BIGINT) 저장
     """
-    # DB에서 사용자 인증
+    # DB에서 사용자 인증 (이메일 기반)
     user = await auth_service.authenticate_user(
         session=session,
-        user_id=login_data.user_id,
+        email=login_data.email,
         password=login_data.password,
     )
 
     if not user:
-        raise HTTPException(status_code=401, detail="사용자 ID 또는 비밀번호가 일치하지 않습니다.")
+        raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 일치하지 않습니다.")
 
-    # 세션에 사용자 정보 저장
+    # 세션에 사용자 정보 저장 (user_id는 BIGINT)
     login_user(request, user_id=user.user_id, username=user.username)
 
     return LoginResponse(
         success=True,
         message="로그인 성공",
         user_id=user.user_id,
+        username=user.username,
     )
 
 
@@ -172,17 +137,20 @@ async def get_current_user(
 
     user_id = get_current_user_id(request)
     
-    # DB에서 사용자 정보 조회
-    user = await auth_service.get_user_by_user_id(session, user_id)
+    # DB에서 사용자 정보 조회 (user_id는 BIGINT)
+    user = await auth_service.get_user_by_id(session, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
 
     return UserInfoResponse(
         user_id=user.user_id,
         username=user.username,
-        nickname=user.nickname,
         email=user.email,
+        nickname=user.nickname,
         gender=user.gender,
-        birth_date=user.birth_date.isoformat(),
+        age=user.age,
+        weight=user.weight,
+        health_goal=user.health_goal,
+        created_at=user.created_at.isoformat() if user.created_at else None,
+        updated_at=user.updated_at.isoformat() if user.updated_at else None,
     )
-

@@ -2,17 +2,21 @@
 
 FastAPI 기반 음식 칼로리 비전 백엔드 서비스
 
+> 📝 **최신 업데이트 (2025-11-07)**: ERDCloud 스키마 전환 및 이메일 기반 인증 적용  
+> 자세한 내용은 [CHANGELOG.md](./CHANGELOG.md)를 참고하세요.
+
 ## 개요
 
-이 백엔드는 프론트엔드 우선 접근 방식으로 개발되었으며, Next.js 프론트엔드의 API 계약에 맞춰 설계되었습니다.
+이 백엔드는 ERDCloud 설계 기반으로 재구성되었으며, Next.js 프론트엔드와 완벽하게 통합됩니다.
 
 ## 주요 기능
 
-- 🔐 **세션 기반 인증**: 안전한 사용자 로그인/로그아웃 관리
-- 🏥 **사용자 건강 관리**: 건강 정보 및 섭취 현황 조회
-- 🍽️ **식단 추천**: AI 기반 개인화된 식단 추천
+- 🔐 **이메일 기반 인증**: 안전한 사용자 로그인/로그아웃 관리 (세션 기반)
+- 👤 **사용자 관리**: ERDCloud 스키마 기반 사용자 정보 관리
+- 🍽️ **음식 섭취 기록**: UserFoodHistory를 통한 식단 기록
+- 📊 **건강 점수**: 음식별 영양 점수 계산 및 관리
+- 📈 **건강 리포트**: 일일/주간/월간 건강 리포트 생성
 - 📸 **음식 이미지 분석**: 비전 AI를 통한 음식 인식 및 영양 정보 분석
-- 💬 **챗봇**: 음식 및 영양 관련 대화형 어시스턴트
 
 ## 기술 스택
 
@@ -37,6 +41,14 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 ```bash
 pip install -r requirements.txt
 ```
+
+**주요 의존성:**
+- `fastapi==0.115.4`: 웹 프레임워크
+- `sqlalchemy[asyncio]==2.0.36`: ORM (비동기)
+- `asyncmy==0.2.9`: MySQL 비동기 드라이버
+- `pydantic[email]==2.9.2`: 데이터 검증 (이메일 포함)
+- `email-validator==2.2.0`: 이메일 유효성 검사
+- `passlib[bcrypt]==1.7.4`: 비밀번호 해싱
 
 ### 3. 환경 변수 설정
 
@@ -65,28 +77,47 @@ SESSION_SAME_SITE=lax
 
 **중요**: `.env` 파일은 Git에 커밋하지 마세요! (이미 `.gitignore`에 포함됨)
 
-### 4. 데이터베이스 마이그레이션
+### 4. 데이터베이스 마이그레이션 (ERDCloud 스키마)
 
-데이터베이스 테이블을 생성합니다:
+⚠️ **중요**: 
+- User 테이블을 포함한 대부분의 테이블이 재생성됩니다
+- 기존 사용자 데이터는 손실됩니다
+- `food_nutrients` 테이블은 유지됩니다
+
+#### 4-1. ERDCloud 스키마 적용
+
+**방법 1: MySQL Workbench 사용**
+1. MySQL Workbench 실행
+2. `erdcloud_schema_final.sql` 파일 열기
+3. 전체 스크립트 실행
+
+**방법 2: CLI 사용**
 
 ```bash
-# 마이그레이션 실행 (테이블 생성)
-python -m alembic upgrade head
-
-# (선택) 마이그레이션 파일 생성 (모델 변경 시)
-python -m alembic revision --autogenerate -m "설명"
+mysql -u root -p tempdb < erdcloud_schema_final.sql
 ```
 
-생성되는 테이블:
-- `users` - 사용자 정보
-- `user_health_info` - 건강 정보
-- `meal_records` - 식사 기록
-- `daily_scores` - 일일 식단 점수
-- `food_analyses` - 음식 이미지 분석 결과
-- `chat_messages` - 챗봇 대화 기록
-- `meal_recommendations` - 식단 추천
+**생성되는 테이블:**
+- ✅ `User` - 사용자 정보 (user_id: BIGINT AUTO_INCREMENT)
+- ✅ `Food` - 음식 기본 정보
+- ✅ `UserFoodHistory` - 음식 섭취 기록
+- ✅ `health_score` - 건강 점수
+- ✅ `HealthReport` - 건강 리포트
+- ✅ `UserPreferences` - 사용자 선호도
+- ✅ `disease_allergy_profile` - 질병/알레르기 프로필
 
-**참고**: `food_nutrients` 테이블은 다른 팀원이 관리하므로 자동 생성되지 않습니다.
+**유지되는 테이블:**
+- ✅ `food_nutrients` - 절대 수정 금지 (기존 데이터 유지)
+
+#### 4-2. 스키마 확인
+
+```sql
+-- User 테이블 AUTO_INCREMENT 확인
+DESCRIBE `User`;
+
+-- 생성된 테이블 확인
+SHOW TABLES;
+```
 
 ### 5. 서버 실행
 
@@ -105,25 +136,25 @@ uvicorn app.main:app --reload --port 8000
 - `GET /healthz` - 기본 헬스 체크
 - `GET /api/v1/health` - 상세 헬스 체크
 
-### 인증 (세션 기반)
-- `POST /api/v1/auth/login` - 로그인
+### 인증 (이메일 기반, 세션)
+- `POST /api/v1/auth/signup` - 회원가입 (이메일, username, password)
+- `POST /api/v1/auth/login` - 로그인 (이메일 기반)
 - `POST /api/v1/auth/logout` - 로그아웃
 - `GET /api/v1/auth/session` - 세션 정보 조회
-- `GET /api/v1/auth/me` - 현재 사용자 정보
+- `GET /api/v1/auth/me` - 현재 사용자 정보 (닉네임, username 등)
 
 ### 사용자
-- `GET /api/v1/user/intake-data` - 사용자 섭취 현황 조회
-- `GET /api/v1/user/health-info` - 사용자 건강 정보 조회
-
-### 식단
-- `GET /api/v1/meals/recommendations` - 식단 추천 조회
-- `POST /api/v1/meals/selection` - 식단 선택
+- `GET /api/v1/user/*` - 사용자 관련 API
 
 ### 음식 이미지 분석
 - `POST /api/v1/food/analysis` - 음식 이미지 분석
 
-### 챗봇
-- `POST /api/v1/chat` - 챗봇 메시지 처리
+### 🚧 개발 예정 (ERDCloud 기반)
+- `POST /api/v1/food-history` - 음식 섭취 기록
+- `GET /api/v1/food-history` - 섭취 기록 조회
+- `POST /api/v1/health-score` - 건강 점수 계산
+- `GET /api/v1/health-report` - 건강 리포트 조회
+- `POST /api/v1/preferences` - 사용자 선호도 설정
 
 ## 테스트
 

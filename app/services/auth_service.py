@@ -1,11 +1,11 @@
-"""인증 관련 서비스 로직"""
-from datetime import date, datetime
+"""인증 관련 서비스 로직 - ERDCloud 스키마 기반"""
+from datetime import date
 
 from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import User, UserHealthInfo
+from app.db.models import User
 
 # 비밀번호 해싱
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -25,93 +25,100 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(password_bytes.decode('utf-8'), hashed_password)
 
 
-async def get_user_by_user_id(session: AsyncSession, user_id: str) -> User | None:
-    """user_id로 사용자 조회"""
+async def get_user_by_id(session: AsyncSession, user_id: int) -> User | None:
+    """user_id(BIGINT)로 사용자 조회"""
     result = await session.execute(select(User).where(User.user_id == user_id))
     return result.scalar_one_or_none()
 
 
-async def get_user_by_id(session: AsyncSession, id: int) -> User | None:
-    """ID로 사용자 조회"""
-    result = await session.execute(select(User).where(User.id == id))
+async def get_user_by_email(session: AsyncSession, email: str) -> User | None:
+    """이메일로 사용자 조회"""
+    result = await session.execute(select(User).where(User.email == email))
+    return result.scalar_one_or_none()
+
+
+async def get_user_by_username(session: AsyncSession, username: str) -> User | None:
+    """username으로 사용자 조회"""
+    result = await session.execute(select(User).where(User.username == username))
     return result.scalar_one_or_none()
 
 
 async def create_user(
     session: AsyncSession,
-    user_id: str,
+    email: str,
     username: str,
-    nickname: str,
     password: str,
-    gender: str,
-    birth_date: date,
-    email: str | None = None,
+    nickname: str | None = None,
+    gender: str | None = None,
+    age: int | None = None,
+    weight: float | None = None,
+    health_goal: str = "maintain",
 ) -> User:
-    """새 사용자 생성"""
-    # 중복 확인
-    existing_user = await get_user_by_user_id(session, user_id)
+    """
+    새 사용자 생성 (user_id는 자동생성)
+    
+    Args:
+        session: DB 세션
+        email: 이메일 (필수, 고유)
+        username: 사용자명 (필수, 고유)
+        password: 비밀번호
+        nickname: 닉네임
+        gender: 성별 ('M', 'F', 'Other')
+        age: 나이
+        weight: 체중
+        health_goal: 건강 목표 ('gain', 'maintain', 'loss')
+    
+    Returns:
+        생성된 User 객체
+    """
+    # 이메일 중복 확인
+    existing_user = await get_user_by_email(session, email)
     if existing_user:
-        raise ValueError("이미 존재하는 사용자 ID입니다.")
+        raise ValueError("이미 존재하는 이메일입니다.")
+    
+    # username 중복 확인
+    existing_user = await get_user_by_username(session, username)
+    if existing_user:
+        raise ValueError("이미 존재하는 사용자명입니다.")
 
     # 비밀번호 해싱
     hashed_password = hash_password(password)
 
-    # 사용자 생성
+    # 사용자 생성 (user_id는 DB에서 자동생성)
     user = User(
-        user_id=user_id,
-        username=username,
-        nickname=nickname,
-        password_hash=hashed_password,
-        gender=gender,
-        birth_date=birth_date,
         email=email,
+        username=username,
+        password=hashed_password,
+        nickname=nickname or username,
+        gender=gender,
+        age=age,
+        weight=weight,
+        health_goal=health_goal,
     )
 
     session.add(user)
-    await session.flush()  # ID 생성을 위해 flush
+    await session.flush()  # user_id 생성을 위해 flush
 
     return user
 
 
-async def create_user_health_info(
-    session: AsyncSession,
-    user_id: int,
-    goal: str,
-    body_type: str,
-    activity_level: str,
-    recommended_calories: float,
-    has_allergy: bool = False,
-    allergy_info: str | None = None,
-    medical_condition: str | None = None,
-    allergies: list[str] | None = None,
-    diseases: list[str] | None = None,
-) -> UserHealthInfo:
-    """사용자 건강 정보 생성"""
-    health_info = UserHealthInfo(
-        user_id=user_id,
-        goal=goal,
-        body_type=body_type,
-        activity_level=activity_level,
-        recommended_calories=recommended_calories,
-        has_allergy=has_allergy,
-        allergy_info=allergy_info,
-        medical_condition=medical_condition,
-        allergies={"items": allergies} if allergies else None,
-        diseases={"items": diseases} if diseases else None,
-    )
-
-    session.add(health_info)
-    return health_info
-
-
-async def authenticate_user(session: AsyncSession, user_id: str, password: str) -> User | None:
-    """사용자 인증 (로그인)"""
-    user = await get_user_by_user_id(session, user_id)
+async def authenticate_user(session: AsyncSession, email: str, password: str) -> User | None:
+    """
+    사용자 인증 (이메일 로그인)
+    
+    Args:
+        session: DB 세션
+        email: 이메일
+        password: 비밀번호
+    
+    Returns:
+        인증 성공 시 User 객체, 실패 시 None
+    """
+    user = await get_user_by_email(session, email)
     if not user:
         return None
 
-    if not verify_password(password, user.password_hash):
+    if not verify_password(password, user.password):
         return None
 
     return user
-

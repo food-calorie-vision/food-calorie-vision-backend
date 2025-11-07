@@ -1,73 +1,82 @@
-"""인증 관련 스키마"""
-from datetime import date
-
-from pydantic import BaseModel, Field
+"""인증 관련 스키마 - ERDCloud 스키마 기반"""
+from typing import Literal, Optional
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class SignupRequest(BaseModel):
-    """회원가입 요청"""
-
-    user_id: str = Field(..., min_length=3, max_length=50, description="사용자 ID")
-    nickname: str = Field(..., min_length=2, max_length=100, description="닉네임")
+    """
+    회원가입 요청 (ERDCloud User 테이블 기반)
+    user_id는 DB에서 자동생성됨
+    """
+    # 필수 정보
+    email: EmailStr = Field(..., description="이메일 (고유)")
+    username: str = Field(..., min_length=2, max_length=50, description="사용자명 (고유)")
     password: str = Field(..., min_length=6, description="비밀번호")
-    gender: str = Field(..., description="성별 (남자/여자)")
-    birth_date: str = Field(..., description="생년월일 (YYYY-MM-DD)")
-    
-    # 건강 정보
-    has_allergy: str = Field(default="아니오", description="알레르기 유무 (예/아니오)")
-    allergy_info: str | None = Field(None, description="알레르기 정보")
-    body_type: str = Field(..., description="체형 목표 (감량/유지/증량)")
-    medical_condition: str | None = Field(None, description="질병 정보")
-    health_goal: str = Field(..., description="건강 목표")
     
     # 선택 정보
-    email: str | None = Field(None, description="이메일")
+    nickname: Optional[str] = Field(None, max_length=50, description="닉네임")
+    gender: Optional[Literal['M', 'F']] = Field(None, description="성별 (M/F)")
+    age: Optional[int] = Field(None, ge=0, le=150, description="나이")
+    weight: Optional[float] = Field(None, ge=0, description="체중 (kg)")
+    health_goal: Literal['gain', 'maintain', 'loss'] = Field(default="maintain", description="건강 목표 (gain/maintain/loss)")
+    
+    @field_validator('gender')
+    @classmethod
+    def validate_gender(cls, v):
+        if v is not None and v not in ['M', 'F']:
+            raise ValueError('gender must be M or F')
+        return v
+    
+    @field_validator('health_goal')
+    @classmethod
+    def validate_health_goal(cls, v):
+        if v not in ['gain', 'maintain', 'loss']:
+            raise ValueError('health_goal must be gain, maintain, or loss')
+        return v
 
 
 class SignupResponse(BaseModel):
     """회원가입 응답"""
-
     success: bool
     message: str
-    user_id: str | None = None
+    user_id: int | None = None  # BIGINT
 
 
 class LoginRequest(BaseModel):
-    """로그인 요청"""
-
-    user_id: str
-    password: str
+    """로그인 요청 (이메일 기반)"""
+    email: EmailStr = Field(..., description="이메일")
+    password: str = Field(..., description="비밀번호")
 
 
 class LoginResponse(BaseModel):
     """로그인 응답"""
-
     success: bool
     message: str
-    user_id: str | None = None
+    user_id: int | None = None  # BIGINT
+    username: str | None = None
 
 
 class LogoutResponse(BaseModel):
     """로그아웃 응답"""
-
     success: bool
     message: str
 
 
 class SessionInfoResponse(BaseModel):
     """세션 정보 응답"""
-
     authenticated: bool
-    user_id: str | None = None
+    user_id: int | None = None  # BIGINT
 
 
 class UserInfoResponse(BaseModel):
     """사용자 정보 응답"""
-
-    user_id: str
+    user_id: int  # BIGINT
     username: str
-    nickname: str
-    email: str | None = None
-    gender: str
-    birth_date: str
-
+    email: str
+    nickname: str | None = None
+    gender: str | None = None
+    age: int | None = None
+    weight: float | None = None
+    health_goal: str
+    created_at: str | None = None
+    updated_at: str | None = None
