@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import JSON, Date, DateTime, Enum, Integer, String, DECIMAL, BigInteger, func
+from sqlalchemy import JSON, Date, DateTime, Enum, Integer, String, DECIMAL, BigInteger, Boolean, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -126,3 +126,41 @@ class DiseaseAllergyProfile(Base):
 
     def __repr__(self) -> str:
         return f"<DiseaseAllergyProfile(profile_id={self.profile_id}, user_id={self.user_id})>"
+
+
+class Announcement(Base):
+    """공지사항 테이블"""
+
+    __tablename__ = "Announcement"
+
+    announcement_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False, comment='공지사항 제목')
+    content: Mapped[str] = mapped_column(Text, nullable=False, comment='공지사항 내용')
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.current_timestamp(), comment='작성일')
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.current_timestamp(), onupdate=func.current_timestamp(), comment='수정일')
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment='활성 여부')
+    view_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment='조회수')
+
+    def __repr__(self) -> str:
+        return f"<Announcement(announcement_id={self.announcement_id}, title={self.title})>"
+
+
+class Inquiry(Base):
+    """문의하기 테이블"""
+
+    __tablename__ = "Inquiry"
+
+    inquiry_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment='사용자 ID (필수)')
+    nickname: Mapped[str] = mapped_column(String(50), nullable=False, comment='닉네임')
+    email: Mapped[str] = mapped_column(String(100), nullable=False, comment='이메일')
+    inquiry_type: Mapped[str] = mapped_column(String(50), nullable=False, comment='문의 유형')
+    subject: Mapped[str] = mapped_column(String(200), nullable=False, comment='문의 제목')
+    content: Mapped[str] = mapped_column(Text, nullable=False, comment='문의 내용')
+    status: Mapped[str] = mapped_column(Enum('pending', 'in_progress', 'completed', name='inquiry_status_enum'), nullable=False, default='pending', comment='답변 상태')
+    response: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment='답변 내용')
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.current_timestamp(), comment='문의 작성일')
+    responded_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment='답변 완료일')
+
+    def __repr__(self) -> str:
+        return f"<Inquiry(inquiry_id={self.inquiry_id}, subject={self.subject}, status={self.status})>"
