@@ -14,11 +14,7 @@ class Settings(BaseSettings):
     api_version: str = "v1"
     port: int = 8000
     database_url: str = "mysql+asyncmy://root:dufdjwnj@210.125.70.71:32152/tempdb"
-<<<<<<< HEAD
     cors_allow_origins: list[str] = ["http://localhost:3000"]
-=======
-    cors_allow_origins: list[str] = ["*"]
->>>>>>> 0fc06cfb80a7627348b1a0ff9669bdb9cf8eb34b
     
     # Session settings
     session_secret_key: str = "replace-this-session-secret-key-in-production"

@@ -1,11 +1,9 @@
-"""API v1 routes package"""
+"""API v1 routes package - ERDCloud 스키마 기반"""
 
-from app.api.v1.routes import chat, health, meals, users, vision
+from app.api.v1.routes import auth, users, vision
 
 __all__ = [
-    "chat",
-    "health",
-    "meals",
+    "auth",
     "users",
     "vision",
 ]
