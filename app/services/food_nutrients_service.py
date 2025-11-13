@@ -149,13 +149,21 @@ async def get_best_match_for_food(
         
         # food_class1 (대분류) 정확히 일치 시 높은 점수
         if food.food_class1 and food.food_class1.lower() == food_name.lower():
-            score += 20
-            print(f"  - {food.nutrient_name}: food_class1 정확 일치 (+20점)")
+            score += 50
+            print(f"  - {food.nutrient_name}: food_class1 정확 일치 (+50점)")
         
-        # nutrient_name에 음식 이름 포함 시
-        if food.nutrient_name and food_name.lower() in food.nutrient_name.lower():
-            score += 15
-            print(f"  - {food.nutrient_name}: nutrient_name 포함 (+15점)")
+        # nutrient_name이 정확히 일치 (예: "사과" == "사과")
+        if food.nutrient_name and food.nutrient_name.lower() == food_name.lower():
+            score += 100
+            print(f"  - {food.nutrient_name}: nutrient_name 정확 일치 (+100점)")
+        # nutrient_name이 "음식명_재료" 형태로 시작 (예: "사과_주스")
+        elif food.nutrient_name and food.nutrient_name.lower().startswith(f"{food_name.lower()}_"):
+            score += 30
+            print(f"  - {food.nutrient_name}: nutrient_name이 '{food_name}_'로 시작 (+30점)")
+        # nutrient_name에 음식 이름 포함 (예: "사과파이"에 "사과" 포함)
+        elif food.nutrient_name and food_name.lower() in food.nutrient_name.lower():
+            score += 10
+            print(f"  - {food.nutrient_name}: nutrient_name 부분 포함 (+10점)")
         
         # food_class2 (중분류/재료)와 재료 매칭
         for ingredient in ingredients:
@@ -163,8 +171,8 @@ async def get_best_match_for_food(
             
             # food_class2에 재료 포함
             if food.food_class2 and ingredient_lower in food.food_class2.lower():
-                score += 10
-                print(f"  - {food.nutrient_name}: food_class2에 '{ingredient}' 포함 (+10점)")
+                score += 15
+                print(f"  - {food.nutrient_name}: food_class2에 '{ingredient}' 포함 (+15점)")
             
             # nutrient_name에 재료 포함
             elif food.nutrient_name and ingredient_lower in food.nutrient_name.lower():
