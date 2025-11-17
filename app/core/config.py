@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     api_prefix: str = "/api"
     api_version: str = "v1"
     port: int = 8000
-    database_url: str = "mysql+asyncmy://root:dufdjwnj@210.125.70.71:32152/tempdb"
+    database_url: str = "mysql+asyncmy://root:dufdjwnj@10.43.40.99:3306/tempdb"
     cors_allow_origins: list[str] = ["http://localhost:3000"]
     
     # Session settings
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     redis_url: str | None = None  # e.g., "redis://localhost:6379/0"
     
     # AI/ML Settings
-    openai_api_key: str | None = None  # ⚠️ IMPORTANT: Set in .env file, NEVER commit API keys!
+    openai_api_key: str | None = "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"  # OpenAI API Key
     vision_model_path: str | None = "models/yolo11n.pt"
 
     @field_validator("cors_allow_origins", mode="before")

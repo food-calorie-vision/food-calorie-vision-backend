@@ -1,7 +1,7 @@
 """GPT-Vision 음식 분석 서비스"""
 import base64
 import io
-from typing import Optional
+from typing import Optional, List
 
 from openai import OpenAI
 from PIL import Image
@@ -318,6 +318,195 @@ class GPTVisionService:
                 "suggestions": ["음식 정보를 다시 분석해주세요."],
                 "raw_response": gpt_response  # 디버깅용
             }
+    
+    def analyze_ingredient_image(self, image_bytes: bytes, roboflow_hint: str = "") -> str:
+        """
+        크롭된 식재료 이미지를 GPT Vision으로 분석
+        
+        Args:
+            image_bytes: 크롭된 이미지 바이트
+            roboflow_hint: Roboflow가 예측한 재료명 (힌트로 사용)
+            
+        Returns:
+            정확한 식재료 이름 (한글)
+        """
+        if not self.client:
+            return roboflow_hint if roboflow_hint else "알 수 없음"
+        
+        try:
+            # 이미지를 base64로 인코딩
+            image_base64 = self._image_to_base64(image_bytes)
+            
+            # GPT Vision에 전달할 프롬프트
+            prompt = f"""이 이미지에 있는 식재료를 정확히 식별해주세요.
+
+규칙:
+1. 한글 이름으로 답변 (예: 당근, 양파, 감자)
+2. 식재료 이름만 반환 (설명 없이)
+3. 여러 개면 첫 번째 것만
+4. 확실하지 않으면 "알 수 없음"
+
+{f"참고: Roboflow 예측 = {roboflow_hint}" if roboflow_hint else ""}
+
+답변:"""
+            
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{image_base64}"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=50,
+                temperature=0.3
+            )
+            
+            raw_response = response.choices[0].message.content.strip()
+            ingredient_name = raw_response.split('\n')[0].strip()
+            ingredient_name = ingredient_name.replace('**', '').replace('*', '')
+            
+            return ingredient_name
+            
+        except Exception as e:
+            print(f"❌ GPT Vision 분석 실패: {e}")
+            return roboflow_hint if roboflow_hint else "알 수 없음"
+    
+    def analyze_ingredients_with_boxes(
+        self, 
+        image_with_boxes_bytes: bytes, 
+        num_objects: int,
+        roboflow_hints: List[str]
+    ) -> List[str]:
+        """
+        박스가 그려진 이미지를 분석하여 각 박스 안의 식재료를 식별
+        
+        Args:
+            image_with_boxes_bytes: 박스가 그려진 이미지 바이트
+            num_objects: 탐지된 객체 개수
+            roboflow_hints: Roboflow가 예측한 클래스명 리스트
+            
+        Returns:
+            식별된 식재료 이름 리스트 (한글)
+        """
+        if not self.client:
+            return roboflow_hints
+        
+        try:
+            # 이미지를 base64로 인코딩
+            image_base64 = self._image_to_base64(image_with_boxes_bytes)
+            
+            # 힌트 문자열 생성
+            hints_text = "\n".join([f"   - 박스 #{i+1}: {hint}" for i, hint in enumerate(roboflow_hints)])
+            
+            # Few-shot Augmented Detection 프롬프트
+            prompt = f"""🔍 **Few-shot Object Detection Task**
+
+이 이미지에서 AI가 {num_objects}개의 식재료를 탐지하여 초록색 박스로 표시했습니다.
+
+**탐지된 객체 (참고용 패턴):**
+{hints_text}
+
+**⚠️ 중요한 작업:**
+1. **먼저**, 박스로 표시된 식재료들을 정확히 식별하세요
+2. **그 다음**, 박스로 표시된 식재료와 **유사한 패턴**을 가진 음식이 **더 있는지** 이미지 전체를 꼼꼼히 확인하세요
+   - 같은 종류의 음식
+   - 비슷한 색상/형태/질감
+   - 가려져 있거나 겹쳐있어도 찾아내세요
+3. 박스가 **놓친 객체**가 있다면 반드시 추가로 보고하세요
+
+**Few-shot Learning 예시:**
+- 만약 박스 #1, #2가 "양파"라면 → 이미지에서 양파 패턴을 학습 → 다른 양파도 찾기
+- 가려진 것, 작은 것, 그림자 속에 있는 것도 포함
+
+**출력 형식:**
+먼저 박스 번호 순서대로 나열한 후, 추가로 발견한 것이 있으면 "추가:"로 표시
+
+**예시 1 (박스만 있는 경우):**
+양파
+당근
+
+**예시 2 (추가 발견한 경우):**
+양파
+당근
+추가: 양파
+
+**규칙:**
+- 한글 이름만 (설명 없이)
+- 확실한 것만 보고
+- Roboflow 예측은 힌트일 뿐, 실제 이미지를 직접 보고 판단
+
+답변:"""
+            
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{image_base64}"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=300,
+                temperature=0.3
+            )
+            
+            raw_response = response.choices[0].message.content.strip()
+            
+            # 응답 파싱: Few-shot 결과 처리
+            lines = raw_response.strip().split('\n')
+            ingredients = []
+            additional_found = []
+            
+            for line in lines:
+                line = line.strip()
+                
+                # "추가:" 키워드 감지
+                if line.startswith('추가:') or line.startswith('추가 :') or '추가:' in line:
+                    additional_part = line.split('추가:')[-1].strip()
+                    additional_part = additional_part.lstrip('0123456789.-)# ').strip()
+                    additional_part = additional_part.replace('**', '').replace('*', '')
+                    if additional_part and additional_part != '알 수 없음':
+                        additional_found.append(additional_part)
+                else:
+                    line = line.lstrip('0123456789.-)# ').strip()
+                    line = line.replace('**', '').replace('*', '')
+                    if line and line != '알 수 없음' and not line.startswith('추가'):
+                        ingredients.append(line)
+            
+            # 추가 발견된 것들도 포함
+            all_ingredients = ingredients + additional_found
+            
+            # Few-shot 성공 여부 출력
+            if len(all_ingredients) > num_objects:
+                print(f"✅ GPT Vision 분석 완료: {len(all_ingredients)}개 (Few-shot: +{len(additional_found)})")
+            else:
+                print(f"✅ GPT Vision 분석 완료: {len(all_ingredients)}개")
+            
+            # 최소한 박스 개수만큼은 있어야 함
+            if len(all_ingredients) < num_objects:
+                return roboflow_hints
+            
+            return all_ingredients
+            
+        except Exception as e:
+            print(f"❌ GPT Vision 분석 실패: {e}")
+            return roboflow_hints
 
 
 # 싱글톤 인스턴스
