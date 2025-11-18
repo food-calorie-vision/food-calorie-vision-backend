@@ -2,12 +2,12 @@
 
 FastAPI 기반 음식 칼로리 비전 백엔드 서비스
 
-> 📝 **최신 업데이트 (2025-11-07)**: ERDCloud 스키마 전환 및 이메일 기반 인증 적용  
+> 📝 **최신 업데이트 (2025-11-10)**: YOLO + GPT-Vision 음식 분석 파이프라인 구축  
 > 자세한 내용은 [CHANGELOG.md](./CHANGELOG.md)를 참고하세요.
 
 ## 개요
 
-이 백엔드는 ERDCloud 설계 기반으로 재구성되었으며, Next.js 프론트엔드와 완벽하게 통합됩니다.
+이 백엔드는 ERDCloud 설계 기반으로 재구성되었으며, **YOLO11n 객체 detection**과 **GPT-Vision 이미지 분석**을 결합한 고급 음식 분석 시스템을 제공합니다.
 
 ## 주요 기능
 
@@ -16,7 +16,10 @@ FastAPI 기반 음식 칼로리 비전 백엔드 서비스
 - 🍽️ **음식 섭취 기록**: UserFoodHistory를 통한 식단 기록
 - 📊 **건강 점수**: 음식별 영양 점수 계산 및 관리
 - 📈 **건강 리포트**: 일일/주간/월간 건강 리포트 생성
-- 📸 **음식 이미지 분석**: 비전 AI를 통한 음식 인식 및 영양 정보 분석
+- 🤖 **AI 음식 분석**: YOLO11n + GPT-Vision 파이프라인
+  - YOLO로 음식 객체 detection
+  - GPT-Vision으로 상세 영양 정보 분석
+  - 실시간 건강 제안 제공
 
 ## 기술 스택
 
@@ -49,14 +52,26 @@ pip install -r requirements.txt
 - `pydantic[email]==2.9.2`: 데이터 검증 (이메일 포함)
 - `email-validator==2.2.0`: 이메일 유효성 검사
 - `passlib[bcrypt]==1.7.4`: 비밀번호 해싱
+- `ultralytics==8.3.0`: YOLO11n 객체 detection
+- `openai==1.54.3`: GPT-Vision 이미지 분석
+- `opencv-python==4.10.0.84`: 이미지 처리
+- `torch==2.5.1`: PyTorch (YOLO 백엔드)
 
 ### 3. 환경 변수 설정
 
-`.env` 파일을 생성하고 데이터베이스 연결 정보를 입력하세요:
+**⚠️ 중요: OpenAI API 키 설정 필수!**
+
+`.env` 파일을 생성하고 다음 내용을 추가하세요:
 
 ```bash
 # Database (필수)
 DATABASE_URL=mysql+asyncmy://user:password@host:port/database
+
+# OpenAI API 키 (GPT-Vision) ⭐ 필수!
+OPENAI_API_KEY=sk-your-openai-api-key-here
+
+# YOLO 모델 경로 (선택사항, 자동 다운로드됨)
+VISION_MODEL_PATH=yolo11n.pt
 
 # Application
 APP_ENV=local
@@ -75,7 +90,11 @@ SESSION_HTTPS_ONLY=false
 SESSION_SAME_SITE=lax
 ```
 
-**중요**: `.env` 파일은 Git에 커밋하지 마세요! (이미 `.gitignore`에 포함됨)
+**중요**: 
+- `.env` 파일은 Git에 커밋하지 마세요! (이미 `.gitignore`에 포함됨)
+- OpenAI API 키 발급: https://platform.openai.com/api-keys
+
+📖 **자세한 설정 가이드:** [ENV_SETUP_GUIDE.md](./ENV_SETUP_GUIDE.md)
 
 ### 4. 데이터베이스 마이그레이션 (ERDCloud 스키마)
 
@@ -122,13 +141,82 @@ SHOW TABLES;
 ### 5. 서버 실행
 
 ```bash
-uvicorn app.main:app --reload --port 8000
+python -m uvicorn app.main:app --reload --port 8000
+```
+
+**서버 시작 로그 확인:**
+```
+✅ YOLO 모델 로드 완료!
+✅ OpenAI GPT-Vision 클라이언트 초기화 완료!
+INFO:     Uvicorn running on http://127.0.0.1:8000
 ```
 
 서버가 실행되면 다음 URL에서 확인할 수 있습니다:
 - API: http://localhost:8000
 - Swagger 문서: http://localhost:8000/docs
 - ReDoc 문서: http://localhost:8000/redoc
+
+---
+
+## 🤖 AI 음식 분석 파이프라인
+
+### 처리 흐름
+
+```
+사용자 이미지 업로드
+    ↓
+YOLO11n Detection (음식 객체 감지)
+    ↓
+GPT-Vision 분석 (YOLO 결과 + 이미지)
+    ↓
+상세 영양 정보 반환 (칼로리, 영양소, 건강 제안)
+```
+
+### 테스트 방법
+
+**Swagger UI에서 테스트:**
+1. http://localhost:8000/docs 접속
+2. `POST /api/v1/food/analysis-upload` 찾기
+3. "Try it out" → 이미지 파일 업로드 → "Execute"
+
+**cURL로 테스트:**
+```bash
+curl -X POST "http://localhost:8000/api/v1/food/analysis-upload" \
+  -H "Content-Type: multipart/form-data" \
+  -F "file=@pizza.jpg"
+```
+
+**응답 예시:**
+```json
+{
+  "success": true,
+  "data": {
+    "analysis": {
+      "foodName": "페퍼로니 피자",
+      "calories": 800,
+      "nutrients": {
+        "protein": 30.0,
+        "carbs": 80.0,
+        "fat": 40.0,
+        "sodium": 1500.0,
+        "fiber": 3.0
+      },
+      "confidence": 0.9,
+      "suggestions": [
+        "피자는 칼로리가 높으니 적당히 섭취하세요.",
+        "채소를 추가하여 영양 균형을 맞추세요."
+      ]
+    },
+    "timestamp": "2025-11-10T...",
+    "processingTime": 3500
+  },
+  "message": "✅ 분석 완료: 페퍼로니 피자 (건강점수: 65점)"
+}
+```
+
+📖 **자세한 설정 가이드:** [YOLO_GPT_VISION_SETUP.md](./YOLO_GPT_VISION_SETUP.md)
+
+---
 
 ## API 엔드포인트
 

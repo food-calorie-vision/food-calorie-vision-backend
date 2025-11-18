@@ -6,10 +6,11 @@ from pydantic import BaseModel, ConfigDict, Field
 class FoodNutrients(BaseModel):
     """음식 영양소"""
 
-    protein: int
-    carbs: int
-    fat: int
-    sodium: int
+    protein: float
+    carbs: float
+    fat: float
+    sodium: float
+    fiber: float = 0.0  # 식이섬유 추가
 
 
 class FoodAnalysisRequest(BaseModel):
@@ -25,16 +26,31 @@ class FoodAnalysisRequest(BaseModel):
     timestamp: str | None = None
 
 
+class FoodCandidate(BaseModel):
+    """후보 음식 정보"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    food_name: str = Field(alias="foodName")
+    confidence: float  # 0.0 ~ 1.0
+    description: str = ""
+
+
 class FoodAnalysisResult(BaseModel):
     """음식 분석 결과"""
 
     model_config = ConfigDict(populate_by_name=True)
 
     food_name: str = Field(alias="foodName")
+    description: str = ""  # 음식 설명
+    ingredients: list[str] = []  # 주요 재료 3-4개
     calories: int
     nutrients: FoodNutrients
+    portion_size: str = Field(default="1인분", alias="portionSize")  # 1회 제공량
+    health_score: int = Field(default=0, alias="healthScore")  # 건강 점수 (0-100)
     confidence: float
     suggestions: list[str]
+    candidates: list[FoodCandidate] = []  # 여러 후보 음식 리스트
 
 
 class FoodAnalysisData(BaseModel):
@@ -43,4 +59,13 @@ class FoodAnalysisData(BaseModel):
     analysis: FoodAnalysisResult
     timestamp: str
     processing_time: int = Field(alias="processingTime")
+
+
+class FoodReanalysisRequest(BaseModel):
+    """음식 재분석 요청 (사용자가 다른 후보 선택)"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    selected_food_name: str = Field(alias="selectedFoodName")
+    ingredients: list[str] = []  # 원본 재료 정보 (있으면 재사용)
 

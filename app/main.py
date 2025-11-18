@@ -1,6 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
+from dotenv import load_dotenv
+
+# .env 파일 로드 (최우선!)
+load_dotenv()
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
