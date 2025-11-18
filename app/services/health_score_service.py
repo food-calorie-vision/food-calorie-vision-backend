@@ -222,6 +222,128 @@ async def calculate_food_grade(final_score: int) -> str:
         return "영양소 부족"
 
 
+async def calculate_nrf93_score(
+    protein_g: float,
+    fiber_g: float,
+    vitamin_a_ug: float,
+    vitamin_c_mg: float,
+    vitamin_e_mg: float,
+    calcium_mg: float,
+    iron_mg: float,
+    potassium_mg: float,
+    magnesium_mg: float,
+    saturated_fat_g: float,
+    added_sugar_g: float,
+    sodium_mg: float,
+    reference_value_g: float = 100.0
+) -> dict:
+    """
+    NRF9.3 (Nutrient Rich Food Index) 영양 점수 계산
+    
+    NRF9.3 = (∑ 권장영양소 % / 9) - (∑ 제한영양소 % / 3)
+    
+    **권장영양소 9가지:**
+    - 단백질, 식이섬유, 비타민A, 비타민C, 비타민E, 칼슘, 철분, 칼륨, 마그네슘
+    
+    **제한영양소 3가지:**
+    - 포화지방, 첨가당, 나트륨
+    
+    Args:
+        protein_g: 단백질 (g)
+        fiber_g: 식이섬유 (g)
+        vitamin_a_ug: 비타민A (μg RAE)
+        vitamin_c_mg: 비타민C (mg)
+        vitamin_e_mg: 비타민E (mg α-TE)
+        calcium_mg: 칼슘 (mg)
+        iron_mg: 철분 (mg)
+        potassium_mg: 칼륨 (mg)
+        magnesium_mg: 마그네슘 (mg)
+        saturated_fat_g: 포화지방 (g)
+        added_sugar_g: 첨가당 (g)
+        sodium_mg: 나트륨 (mg)
+        reference_value_g: 기준량 (g, 기본 100g)
+    
+    Returns:
+        NRF9.3 점수 계산 결과
+    """
+    # 일일 권장량 (한국인 영양소 섭취기준, 성인 기준)
+    DV = {
+        'protein': 55.0,  # g
+        'fiber': 25.0,  # g
+        'vitamin_a': 700.0,  # μg RAE
+        'vitamin_c': 100.0,  # mg
+        'vitamin_e': 12.0,  # mg α-TE
+        'calcium': 700.0,  # mg
+        'iron': 10.0,  # mg (남성 기준, 여성은 14mg)
+        'potassium': 3500.0,  # mg
+        'magnesium': 350.0,  # mg (남성 기준, 여성은 280mg)
+        'saturated_fat': 15.0,  # g (총 에너지의 7% 기준)
+        'added_sugar': 50.0,  # g (총 에너지의 10% 기준)
+        'sodium': 2000.0,  # mg
+    }
+    
+    # 100g 당으로 정규화
+    scale = 100.0 / reference_value_g
+    
+    # 권장영양소 9가지의 일일권장량 대비 % 계산 (최대 100%로 캡)
+    positive_nutrients = [
+        min((protein_g * scale / DV['protein']) * 100, 100),
+        min((fiber_g * scale / DV['fiber']) * 100, 100),
+        min((vitamin_a_ug * scale / DV['vitamin_a']) * 100, 100),
+        min((vitamin_c_mg * scale / DV['vitamin_c']) * 100, 100),
+        min((vitamin_e_mg * scale / DV['vitamin_e']) * 100, 100),
+        min((calcium_mg * scale / DV['calcium']) * 100, 100),
+        min((iron_mg * scale / DV['iron']) * 100, 100),
+        min((potassium_mg * scale / DV['potassium']) * 100, 100),
+        min((magnesium_mg * scale / DV['magnesium']) * 100, 100),
+    ]
+    
+    # 제한영양소 3가지의 일일권장량 대비 % 계산 (최대 100%로 캡)
+    negative_nutrients = [
+        min((saturated_fat_g * scale / DV['saturated_fat']) * 100, 100),
+        min((added_sugar_g * scale / DV['added_sugar']) * 100, 100),
+        min((sodium_mg * scale / DV['sodium']) * 100, 100),
+    ]
+    
+    # NRF9.3 점수 계산
+    positive_score = sum(positive_nutrients) / 9  # 0~100
+    negative_score = sum(negative_nutrients) / 3   # 0~100
+    raw_score = positive_score - negative_score    # -100~100
+    
+    # 점수 범위를 0~100으로 정규화
+    # -100 → 0점, 0 → 50점, 100 → 100점
+    final_score = (raw_score + 100) / 2
+    
+    # 최종 점수는 0~100 범위로 제한
+    final_score = max(0, min(100, final_score))
+    
+    return {
+        "positive_score": round(positive_score, 2),
+        "negative_score": round(negative_score, 2),
+        "final_score": round(final_score, 2),
+        "food_grade": await calculate_food_grade(int(final_score)),
+        "calc_method": "NRF9.3 (Nutrient Rich Food Index) - 0~100점 정규화",
+        "details": {
+            "positive_nutrients": {
+                "protein": round(positive_nutrients[0], 1),
+                "fiber": round(positive_nutrients[1], 1),
+                "vitamin_a": round(positive_nutrients[2], 1),
+                "vitamin_c": round(positive_nutrients[3], 1),
+                "vitamin_e": round(positive_nutrients[4], 1),
+                "calcium": round(positive_nutrients[5], 1),
+                "iron": round(positive_nutrients[6], 1),
+                "potassium": round(positive_nutrients[7], 1),
+                "magnesium": round(positive_nutrients[8], 1),
+            },
+            "negative_nutrients": {
+                "saturated_fat": round(negative_nutrients[0], 1),
+                "added_sugar": round(negative_nutrients[1], 1),
+                "sodium": round(negative_nutrients[2], 1),
+            }
+        }
+    }
+
+
 async def calculate_korean_nutrition_score(
     protein: float,
     fiber: float,
@@ -232,7 +354,7 @@ async def calculate_korean_nutrition_score(
     saturated_fat: float,
 ) -> dict:
     """
-    한국식 영양 점수 계산
+    한국식 영양 점수 계산 (레거시, 하위 호환용)
     
     한국영양점수 = (단백질 + 섬유질 + 칼슘 + 철분) - (나트륨 + 당분 + 포화지방)
     

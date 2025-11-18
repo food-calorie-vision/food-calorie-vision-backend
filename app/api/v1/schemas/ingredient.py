@@ -38,3 +38,4 @@ class RecommendationData(BaseModel):
     ingredients_used: List[str] = Field(..., description="추천에 사용된 식재료 목록")
     total_ingredients: int = Field(..., description="전체 보유 식재료 개수")
 
+

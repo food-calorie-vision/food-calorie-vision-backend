@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     # Session settings
     session_secret_key: str = "replace-this-session-secret-key-in-production"
     session_cookie_name: str = "fcv_session"
-    session_max_age: int = 3600  # 1 hour in seconds
+    session_max_age: int = 3600  # 1 hour in seconds (자동 갱신 with sliding session)
     session_https_only: bool = False  # Set to True in production with HTTPS
     session_same_site: str = "lax"  # lax, strict, or none
     
