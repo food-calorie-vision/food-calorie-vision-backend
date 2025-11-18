@@ -1,6 +1,6 @@
 """음식 섭취 기록 서비스 - UserFoodHistory 테이블"""
-from datetime import datetime
-from typing import List, Optional
+from datetime import datetime, date
+from typing import List, Optional, Tuple
 
 from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -214,4 +214,81 @@ async def get_food_history_count(
     
     result = await session.execute(query)
     return result.scalar() or 0
+
+
+async def get_user_food_history_with_details(
+    session: AsyncSession,
+    user_id: int,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> Tuple[List[dict], int]:
+    """
+    사용자의 음식 섭취 기록을 Food 정보와 함께 조회
+    
+    Args:
+        session: DB 세션
+        user_id: 사용자 ID
+        start_date: 시작 날짜 (선택)
+        end_date: 종료 날짜 (선택)
+        limit: 최대 결과 개수
+        offset: 결과 오프셋
+    
+    Returns:
+        (기록 리스트, 전체 개수) 튜플
+    """
+    # 전체 개수 조회
+    total = await get_food_history_count(session, user_id, start_date, end_date)
+    
+    # LEFT JOIN으로 Food 정보와 함께 조회
+    query = (
+        select(
+            UserFoodHistory.history_id,
+            UserFoodHistory.user_id,
+            UserFoodHistory.food_id,
+            UserFoodHistory.food_name,
+            UserFoodHistory.consumed_at,
+            UserFoodHistory.portion_size_g,
+            Food.food_class_1,
+            Food.food_class_2,
+            Food.category,
+            Food.image_ref,
+        )
+        .outerjoin(Food, UserFoodHistory.food_id == Food.food_id)
+        .where(UserFoodHistory.user_id == user_id)
+    )
+    
+    # 날짜 필터링
+    if start_date:
+        query = query.where(UserFoodHistory.consumed_at >= start_date)
+    if end_date:
+        query = query.where(UserFoodHistory.consumed_at <= end_date)
+    
+    # 최신순 정렬
+    query = query.order_by(UserFoodHistory.consumed_at.desc())
+    
+    # 페이지네이션
+    query = query.limit(limit).offset(offset)
+    
+    result = await session.execute(query)
+    rows = result.all()
+    
+    # 딕셔너리 리스트로 변환
+    histories = []
+    for row in rows:
+        histories.append({
+            "history_id": row.history_id,
+            "user_id": row.user_id,
+            "food_id": row.food_id,
+            "food_name": row.food_name,
+            "consumed_at": row.consumed_at,
+            "portion_size_g": row.portion_size_g,
+            "food_class_1": row.food_class_1,
+            "food_class_2": row.food_class_2,
+            "category": row.category,
+            "image_ref": row.image_ref,
+        })
+    
+    return histories, total
 

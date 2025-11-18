@@ -52,11 +52,10 @@ class UserFoodHistory(Base):
     __tablename__ = "UserFoodHistory"
 
     history_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    food_id: Mapped[str] = mapped_column(String(200), primary_key=True)
-    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    food_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, server_default=func.current_timestamp())
     portion_size_g: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
-    # memo: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)  # DB에 컬럼 없음
     food_name: Mapped[str] = mapped_column(String(200), nullable=False)
 
     def __repr__(self) -> str:
