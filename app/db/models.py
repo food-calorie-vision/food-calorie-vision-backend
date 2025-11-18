@@ -40,7 +40,7 @@ class Food(Base):
     food_class_1: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, comment='식품大분류명')
     food_class_2: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, comment='식품중분류 -> 음식 명칭')
     food_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
-    ingredients: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, comment='재료 목록 (JSON 문자열)')
+    ingredients: Mapped[Optional[str]] = mapped_column(String(500), nullable=True, comment='사용한 재료 (콤마 구분)')
 
     def __repr__(self) -> str:
         return f"<Food(food_id={self.food_id}, food_name={self.food_name})>"
@@ -164,3 +164,19 @@ class Inquiry(Base):
 
     def __repr__(self) -> str:
         return f"<Inquiry(inquiry_id={self.inquiry_id}, subject={self.subject}, status={self.status})>"
+
+
+class UserIngredient(Base):
+    """사용자 식재료 테이블 - Roboflow 분석 결과 저장"""
+
+    __tablename__ = "UserIngredient"
+
+    ingredient_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment='사용자 ID')
+    ingredient_name: Mapped[str] = mapped_column(String(100), nullable=False, comment='식재료 이름')
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=1, comment='수량')
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.current_timestamp(), comment='등록일')
+    is_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment='사용 여부')
+
+    def __repr__(self) -> str:
+        return f"<UserIngredient(ingredient_id={self.ingredient_id}, user_id={self.user_id}, ingredient_name={self.ingredient_name}, count={self.count})>"
