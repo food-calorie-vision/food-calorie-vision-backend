@@ -125,7 +125,18 @@ async def get_best_match_for_food(
     """
     print(f"🔍 DB 검색: 음식명='{food_name}', 재료={ingredients}")
     
-    # 1. 음식 이름으로 먼저 검색 (food_class1 기준)
+    # 1. 정확한 이름 매칭 먼저 시도 (nutrient_name == food_name)
+    exact_name_stmt = select(FoodNutrient).where(
+        FoodNutrient.nutrient_name == food_name
+    ).limit(1)
+    exact_name_result = await session.execute(exact_name_stmt)
+    exact_match = exact_name_result.scalar_one_or_none()
+    
+    if exact_match:
+        print(f"✅ 정확한 이름 매칭 성공: {exact_match.nutrient_name}")
+        return exact_match
+    
+    # 2. 음식 이름으로 검색 (food_class1 기준)
     food_results = await search_food_by_name(session, food_name, limit=20)
     
     if not food_results:
@@ -229,6 +240,156 @@ async def get_fallback_by_category(
         print(f"❌ 대분류 '{food_name}'에 해당하는 음식 없음")
     
     return fallback
+
+
+async def get_all_food_classes(session: AsyncSession) -> List[str]:
+    """
+    DB에서 모든 대분류(food_class1) 목록 조회
+    
+    Args:
+        session: DB 세션
+        
+    Returns:
+        중복 제거된 대분류 목록 (예: ["밥류", "피자", "국 및 탕류", ...])
+    """
+    stmt = select(FoodNutrient.food_class1).distinct()
+    result = await session.execute(stmt)
+    
+    # None 값 제외하고 정렬
+    classes = [row[0] for row in result.all() if row[0]]
+    classes.sort()
+    
+    print(f"📋 DB 대분류 총 {len(classes)}개: {classes[:10]}...")
+    return classes
+
+
+async def get_representative_food_names(
+    session: AsyncSession,
+    food_class1: str
+) -> List[str]:
+    """
+    특정 대분류의 대표식품명(representative_food_name) 유니크 목록 조회
+    
+    Args:
+        session: DB 세션
+        food_class1: 대분류 이름 (예: "빵 및 과자류")
+        
+    Returns:
+        중복 제거된 대표식품명 목록 (예: ["피자", "빵", "케이크", ...])
+    """
+    stmt = select(FoodNutrient.representative_food_name).distinct().where(
+        FoodNutrient.food_class1 == food_class1
+    )
+    result = await session.execute(stmt)
+    
+    # None 값 제외하고 정렬
+    names = [row[0] for row in result.all() if row[0]]
+    names.sort()
+    
+    print(f"📋 '{food_class1}' 대분류의 대표식품명 {len(names)}개: {names[:10]}...")
+    return names
+
+
+async def get_foods_by_representative_name(
+    session: AsyncSession,
+    food_class1: str,
+    representative_food_name: str
+) -> List[FoodNutrient]:
+    """
+    특정 대분류 + 대표식품명에 속하는 모든 음식 조회
+    
+    Args:
+        session: DB 세션
+        food_class1: 대분류 이름 (예: "빵 및 과자류")
+        representative_food_name: 대표식품명 (예: "피자")
+        
+    Returns:
+        해당 조건의 음식 리스트 (제한 없음 - 모든 음식 반환)
+    """
+    stmt = select(FoodNutrient).where(
+        FoodNutrient.food_class1 == food_class1,
+        FoodNutrient.representative_food_name == representative_food_name
+    )
+    
+    result = await session.execute(stmt)
+    foods = list(result.scalars().all())
+    
+    print(f"📋 '{food_class1}' > '{representative_food_name}': {len(foods)}개 음식 조회")
+    return foods
+
+
+async def get_foods_by_class(
+    session: AsyncSession,
+    food_class1: str,
+    limit: int = 200,
+    keywords: List[str] = None
+) -> List[FoodNutrient]:
+    """
+    특정 대분류(food_class1)에 속하는 모든 음식 조회
+    
+    Args:
+        session: DB 세션
+        food_class1: 대분류 이름 (예: "피자", "밥류")
+        limit: 최대 결과 개수
+        keywords: 우선 정렬할 키워드 리스트 (예: ["햄버거", "치즈"])
+        
+    Returns:
+        해당 대분류의 음식 리스트 (키워드 매칭 우선)
+    """
+    if keywords:
+        # 키워드가 있으면 매칭되는 음식 우선
+        print(f"🔍 키워드로 필터링: {keywords}")
+        
+        # 키워드 매칭 음식 먼저 조회 (nutrient_name + representative_food_name)
+        priority_foods = []
+        for keyword in keywords[:3]:  # 최대 3개 키워드만 사용
+            keyword_stmt = select(FoodNutrient).where(
+                FoodNutrient.food_class1 == food_class1,
+                or_(
+                    FoodNutrient.nutrient_name.like(f"%{keyword}%"),
+                    FoodNutrient.representative_food_name.like(f"%{keyword}%")
+                )
+            ).limit(20)  # 키워드당 20개
+            
+            result = await session.execute(keyword_stmt)
+            priority_foods.extend(result.scalars().all())
+        
+        # 중복 제거
+        seen_ids = set()
+        unique_priority_foods = []
+        for food in priority_foods:
+            if food.food_id not in seen_ids:
+                seen_ids.add(food.food_id)
+                unique_priority_foods.append(food)
+        
+        print(f"✅ 키워드 매칭: {len(unique_priority_foods)}개")
+        
+        # 나머지 음식 조회 (키워드 매칭 제외)
+        remaining_count = limit - len(unique_priority_foods)
+        if remaining_count > 0:
+            remaining_stmt = select(FoodNutrient).where(
+                FoodNutrient.food_class1 == food_class1,
+                FoodNutrient.food_id.notin_(seen_ids)
+            ).limit(remaining_count)
+            
+            result = await session.execute(remaining_stmt)
+            remaining_foods = list(result.scalars().all())
+            
+            print(f"✅ 나머지 음식: {len(remaining_foods)}개")
+            foods = unique_priority_foods + remaining_foods
+        else:
+            foods = unique_priority_foods[:limit]
+    else:
+        # 키워드 없으면 기존 방식
+        stmt = select(FoodNutrient).where(
+            FoodNutrient.food_class1 == food_class1
+        ).limit(limit)
+        
+        result = await session.execute(stmt)
+        foods = list(result.scalars().all())
+    
+    print(f"📋 '{food_class1}' 대분류: 총 {len(foods)}개 음식 조회")
+    return foods
 
 
 async def calculate_combined_nutrients(

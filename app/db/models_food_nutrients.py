@@ -14,6 +14,7 @@ class FoodNutrient(Base):
 
     food_id: Mapped[str] = mapped_column(String(50), primary_key=True)
     nutrient_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    representative_food_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, comment='대표식품명')
     food_class1: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     food_class2: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     unit: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
@@ -24,7 +25,6 @@ class FoodNutrient(Base):
     fiber: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     vitamin_a: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     vitamin_c: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    vitamin_e: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     calcium: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     iron: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     potassium: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

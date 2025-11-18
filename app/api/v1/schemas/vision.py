@@ -34,6 +34,7 @@ class FoodCandidate(BaseModel):
     food_name: str = Field(alias="foodName")
     confidence: float  # 0.0 ~ 1.0
     description: str = ""
+    ingredients: list[str] = []  # 각 후보의 재료 정보
 
 
 class FoodAnalysisResult(BaseModel):
@@ -69,3 +70,29 @@ class FoodReanalysisRequest(BaseModel):
     selected_food_name: str = Field(alias="selectedFoodName")
     ingredients: list[str] = []  # 원본 재료 정보 (있으면 재사용)
 
+
+class SaveFoodRequest(BaseModel):
+    """음식 저장 요청"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    user_id: int = Field(alias="userId")
+    food_name: str = Field(alias="foodName")
+    food_class_1: str | None = Field(None, alias="foodClass1")  # 대분류
+    food_class_2: str | None = Field(None, alias="foodClass2")  # 중분류
+    ingredients: list[str] = []  # 재료 리스트
+    portion_size_g: float | None = Field(None, alias="portionSizeG")  # 섭취량(g)
+    image_ref: str | None = Field(None, alias="imageRef")  # 이미지 참조 (선택)
+    category: str | None = None  # 카테고리 (선택)
+
+
+class SaveFoodResponse(BaseModel):
+    """음식 저장 응답"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    history_id: int = Field(alias="historyId")
+    food_id: str = Field(alias="foodId")
+    food_name: str = Field(alias="foodName")
+    consumed_at: str = Field(alias="consumedAt")
+    portion_size_g: float | None = Field(None, alias="portionSizeG")

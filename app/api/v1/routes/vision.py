@@ -13,11 +13,15 @@ from app.api.v1.schemas.vision import (
     FoodAnalysisResult,
     FoodNutrients,
     FoodReanalysisRequest,
+    SaveFoodRequest,
+    SaveFoodResponse,
 )
 from app.db.session import get_session
 from app.services.gpt_vision_service import get_gpt_vision_service
 from app.services.yolo_service import get_yolo_service
 from app.services.food_nutrients_service import get_best_match_for_food
+from app.services.food_service import get_or_create_food
+from app.services.food_history_service import create_food_history
 
 router = APIRouter()
 
@@ -116,14 +120,20 @@ async def analyze_food_image_with_yolo_gpt(
     session: AsyncSession = Depends(get_session)
 ) -> ApiResponse[FoodAnalysisData]:
     """
-    음식 이미지 분석 (YOLO + GPT-Vision + DB 파이프라인)
+    음식 이미지 분석 (YOLO + GPT-Vision 2단계 + DB 파이프라인)
     
-    **처리 과정:**
+    **처리 과정 (2단계 GPT 방식):**
     1. 사용자가 이미지 업로드
     2. YOLO 모델로 음식 객체 detection
-    3. GPT-Vision이 음식명 + 주요 재료 3-4개 추출
-    4. food_nutrients 테이블에서 영양소 데이터 조회
-    5. GPT 결과 + DB 데이터 결합하여 반환
+    3. DB에서 대분류 목록 조회 (예: "피자", "밥류", "국 및 탕류" 등)
+    4. [1차 GPT] 이미지 + 대분류 목록 → GPT가 대분류 선택
+    5. 선택된 대분류의 모든 음식 조회 (예: 피자류 78개)
+    6. [2차 GPT] 이미지 + 음식 목록 → GPT가 구체적인 음식 선택
+    7. 선택된 음식의 영양소 데이터 반환
+    
+    **장점:**
+    - DB에 실제로 있는 음식만 선택하므로 매칭 정확도 100%
+    - "비슷한 이름" 찾기 불필요
     
     **Args:**
         file: 업로드된 이미지 파일 (JPEG, PNG 등)
@@ -147,20 +157,31 @@ async def analyze_food_image_with_yolo_gpt(
         yolo_result = yolo_service.detect_food(image_bytes)
         print(f"✅ YOLO detection 완료: {yolo_result['summary']}")
         
-        # 3. GPT-Vision 분석 실행 (음식명 + 재료 추출)
-        print("🤖 GPT-Vision 분석 시작...")
+        # 3. GPT-Vision 2단계 분석 실행 (DB 대분류 → GPT → DB 음식 목록 → GPT)
+        print("🤖 GPT-Vision 2단계 분석 시작...")
         gpt_service = get_gpt_vision_service()
-        gpt_result = gpt_service.analyze_food_with_detection(image_bytes, yolo_result)
+        gpt_result = await gpt_service.analyze_food_with_db_guidance(
+            image_bytes, 
+            yolo_result,
+            session  # DB 세션 전달
+        )
         print(f"✅ GPT-Vision 분석 완료: {gpt_result['food_name']}")
         print(f"📝 추출된 재료: {', '.join(gpt_result['ingredients'])}")
         
-        # 4. food_nutrients 테이블에서 영양소 데이터 조회
+        # 4. food_id로 정확한 영양소 데이터 조회
         print("🔍 DB에서 영양소 데이터 조회 중...")
-        food_nutrient = await get_best_match_for_food(
-            session,
-            food_name=gpt_result["food_name"],
-            ingredients=gpt_result["ingredients"]
-        )
+        if gpt_result.get("food_id"):
+            # GPT가 food_id를 반환한 경우 (2단계 방식 성공)
+            from app.services.food_nutrients_service import get_food_by_id
+            food_nutrient = await get_food_by_id(session, gpt_result["food_id"])
+            print(f"✅ DB 매칭 성공 (food_id 사용): {gpt_result['food_id']}")
+        else:
+            # 폴백: 기존 방식 (이름 기반 검색)
+            food_nutrient = await get_best_match_for_food(
+                session,
+                food_name=gpt_result["food_name"],
+                ingredients=gpt_result["ingredients"]
+            )
         
         # 4-1. 매칭 실패 시 대분류 기반 폴백 시도
         is_fallback = False
@@ -237,7 +258,8 @@ async def analyze_food_image_with_yolo_gpt(
             FoodCandidate(
                 foodName=c["food_name"],
                 confidence=c["confidence"],
-                description=c.get("description", "")
+                description=c.get("description", ""),
+                ingredients=c.get("ingredients", [])  # 후보별 재료 추가
             )
             for c in gpt_result.get("candidates", [])
         ]
@@ -283,17 +305,33 @@ async def reanalyze_with_user_selection(
     session: AsyncSession = Depends(get_session)
 ) -> ApiResponse[FoodAnalysisData]:
     """
-    사용자가 선택한 음식으로 재분석
+    사용자가 후보 중 다른 음식을 선택했을 때 영양 정보 조회
     
-    사용자가 여러 후보 중 다른 음식을 선택했을 때,
-    해당 음식명으로 DB를 재검색하여 영양 정보를 반환합니다.
+    **사용 시나리오:**
+    1. 초기 분석 (/analysis-upload)에서 후보 4개 반환
+       - 후보1: 페퍼로니 피자 (90%) + 재료 [밀가루, 토마토소스, ...]
+       - 후보2: 콤비네이션 피자 (80%) + 재료 [밀가루, ...]
+       - 후보3: 하와이안 피자 (70%) + 재료 [...]
+       - 후보4: 불고기 피자 (60%) + 재료 [...]
+    
+    2. 사용자가 "아니야, 이건 후보2 (콤비네이션 피자)야!" 선택
+    
+    3. 이 API 호출:
+       POST /reanalyze-with-selection
+       {
+         "selectedFoodName": "콤비네이션 피자",
+         "ingredients": ["밀가루", "토마토소스", "치즈", "햄", "올리브"]
+       }
+    
+    4. DB에서 "콤비네이션 피자" 검색 → 영양소 정보 반환
     
     **Args:**
-        request: 선택한 음식명과 재료 정보
+        request.selected_food_name: 사용자가 선택한 음식명 (후보 2~4)
+        request.ingredients: 해당 후보의 재료 (검색 정확도 향상용)
         session: DB 세션
         
     **Returns:**
-        선택한 음식의 영양 정보
+        선택한 후보의 정확한 영양소 정보
     """
     start_time = time.time()
     
@@ -404,4 +442,100 @@ async def reanalyze_with_user_selection(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"재분석 중 오류가 발생했습니다: {str(e)}")
+
+
+@router.post("/save-food", response_model=ApiResponse[SaveFoodResponse])
+async def save_user_food(
+    request: SaveFoodRequest,
+    session: AsyncSession = Depends(get_session)
+) -> ApiResponse[SaveFoodResponse]:
+    """
+    사용자가 선택한 음식을 저장
+    
+    **처리 과정:**
+    1. Food 테이블에 음식 정보 저장 (없으면 생성)
+    2. UserFoodHistory 테이블에 섭취 기록 저장
+    
+    **Args:**
+        request: 저장할 음식 정보
+        session: DB 세션
+        
+    **Returns:**
+        저장된 음식 기록 정보
+    """
+    try:
+        print(f"💾 음식 저장 요청: user_id={request.user_id}, food_name={request.food_name}")
+        
+        # 1. food_nutrients에서 영양소 정보 조회
+        print("🔍 food_nutrients에서 음식 정보 조회 중...")
+        food_nutrient = await get_best_match_for_food(
+            session,
+            food_name=request.food_name,
+            ingredients=request.ingredients
+        )
+        
+        # 2. food_id 결정 (food_nutrients의 food_id 사용)
+        if food_nutrient:
+            actual_food_id = food_nutrient.food_id
+            # food_nutrients의 분류 정보도 가져오기
+            actual_food_class_1 = food_nutrient.food_class1
+            actual_food_class_2 = food_nutrient.food_class2
+            print(f"✅ food_nutrients에서 매칭: {actual_food_id} (분류: {actual_food_class_1} > {actual_food_class_2})")
+        else:
+            # 매칭 실패 시 기본 ID 생성
+            actual_food_id = generate_food_id(request.food_name, request.ingredients)
+            actual_food_class_1 = request.food_class_1
+            actual_food_class_2 = request.food_class_2
+            print(f"⚠️ food_nutrients 매칭 실패, 새 ID 생성: {actual_food_id}")
+        
+        # 3. Food 테이블에 음식 저장/조회 (food_nutrients 정보 활용)
+        food = await get_or_create_food(
+            session=session,
+            food_id=actual_food_id,  # food_nutrients의 food_id
+            food_name=request.food_name,
+            food_class_1=actual_food_class_1,  # food_nutrients의 food_class1
+            food_class_2=actual_food_class_2,  # food_nutrients의 food_class2
+            ingredients=request.ingredients,
+            image_ref=request.image_ref,
+            category=request.category,
+        )
+        
+        print(f"✅ Food 준비 완료: {food.food_id}")
+        
+        # 4. UserFoodHistory에 섭취 기록 저장
+        history = await create_food_history(
+            session=session,
+            user_id=request.user_id,
+            food_id=actual_food_id,  # 같은 food_id 사용
+            food_name=request.food_name,
+            consumed_at=datetime.now(),
+            portion_size_g=request.portion_size_g,
+        )
+        
+        print(f"✅ 섭취 기록 저장 완료: history_id={history.history_id}")
+        
+        # 3. 변경사항 커밋
+        await session.commit()
+        
+        # 4. 응답 데이터 구성
+        response = SaveFoodResponse(
+            history_id=history.history_id,
+            food_id=food.food_id,
+            food_name=history.food_name,
+            consumed_at=history.consumed_at.isoformat() if history.consumed_at else datetime.now().isoformat(),
+            portion_size_g=float(history.portion_size_g) if history.portion_size_g else None,
+        )
+        
+        return ApiResponse(
+            success=True,
+            data=response,
+            message=f"✅ 음식이 성공적으로 저장되었습니다: {request.food_name}"
+        )
+        
+    except Exception as e:
+        print(f"❌ 음식 저장 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=f"음식 저장 중 오류가 발생했습니다: {str(e)}")
 

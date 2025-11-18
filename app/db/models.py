@@ -40,6 +40,7 @@ class Food(Base):
     food_class_1: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, comment='식품大분류명')
     food_class_2: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, comment='식품중분류 -> 음식 명칭')
     food_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    ingredients: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, comment='재료 목록 (JSON 문자열)')
 
     def __repr__(self) -> str:
         return f"<Food(food_id={self.food_id}, food_name={self.food_name})>"
@@ -50,12 +51,11 @@ class UserFoodHistory(Base):
 
     __tablename__ = "UserFoodHistory"
 
-    history_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    food_id: Mapped[str] = mapped_column(String(200), primary_key=True)
-    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    history_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    food_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, server_default=func.current_timestamp())
     portion_size_g: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
-    Field: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     food_name: Mapped[str] = mapped_column(String(200), nullable=False)
 
     def __repr__(self) -> str:
