@@ -169,48 +169,60 @@ class DietRecommendationService:
 6. 사용자 요청사항을 고려하세요.
 
 **응답 형식:**
-아래 형식을 **정확히** 따라주세요:
+아래 형식을 **정확히** 따라주세요. 특히 각 끼니별 칼로리를 반드시 명시해야 합니다:
 
 [식단 A]
 이름: [식단 이름]
 설명: [간단한 설명]
 총 칼로리: [숫자] kcal
-아침: [메뉴]
-점심: [메뉴]
-저녁: [메뉴]
-간식: [메뉴]
-영양소: 단백질 [숫자]g / 탄수화물 [숫자]g / 지방 [숫자]g
+아침: [메뉴] ([칼로리]kcal)
+아침 영양소: 단백질 [숫자]g / 탄수화물 [숫자]g / 지방 [숫자]g
+점심: [메뉴] ([칼로리]kcal)
+점심 영양소: 단백질 [숫자]g / 탄수화물 [숫자]g / 지방 [숫자]g
+저녁: [메뉴] ([칼로리]kcal)
+저녁 영양소: 단백질 [숫자]g / 탄수화물 [숫자]g / 지방 [숫자]g
+간식: [메뉴] ([칼로리]kcal)
+간식 영양소: 단백질 [숫자]g / 탄수화물 [숫자]g / 지방 [숫자]g
 
 [식단 B]
 이름: [식단 이름]
 설명: [간단한 설명]
 총 칼로리: [숫자] kcal
-아침: [메뉴]
-점심: [메뉴]
-저녁: [메뉴]
-간식: [메뉴]
-영양소: 단백질 [숫자]g / 탄수화물 [숫자]g / 지방 [숫자]g
+아침: [메뉴] ([칼로리]kcal)
+아침 영양소: 단백질 [숫자]g / 탄수화물 [숫자]g / 지방 [숫자]g
+점심: [메뉴] ([칼로리]kcal)
+점심 영양소: 단백질 [숫자]g / 탄수화물 [숫자]g / 지방 [숫자]g
+저녁: [메뉴] ([칼로리]kcal)
+저녁 영양소: 단백질 [숫자]g / 탄수화물 [숫자]g / 지방 [숫자]g
+간식: [메뉴] ([칼로리]kcal)
+간식 영양소: 단백질 [숫자]g / 탄수화물 [숫자]g / 지방 [숫자]g
 
 [식단 C]
 이름: [식단 이름]
 설명: [간단한 설명]
 총 칼로리: [숫자] kcal
-아침: [메뉴]
-점심: [메뉴]
-저녁: [메뉴]
-간식: [메뉴]
-영양소: 단백질 [숫자]g / 탄수화물 [숫자]g / 지방 [숫자]g
+아침: [메뉴] ([칼로리]kcal)
+아침 영양소: 단백질 [숫자]g / 탄수화물 [숫자]g / 지방 [숫자]g
+점심: [메뉴] ([칼로리]kcal)
+점심 영양소: 단백질 [숫자]g / 탄수화물 [숫자]g / 지방 [숫자]g
+저녁: [메뉴] ([칼로리]kcal)
+저녁 영양소: 단백질 [숫자]g / 탄수화물 [숫자]g / 지방 [숫자]g
+간식: [메뉴] ([칼로리]kcal)
+간식 영양소: 단백질 [숫자]g / 탄수화물 [숫자]g / 지방 [숫자]g
 
 **예시:**
 [식단 A]
 이름: 고단백 식단
 설명: 근육 생성에 최적화된 고단백 식단
 총 칼로리: 1500 kcal
-아침: 현미밥 1공기 + 닭가슴살 구이 100g + 시금치 무침
-점심: 연어 덮밥 1인분 + 계란국
-저녁: 고등어 구이 1마리 + 두부조림 + 배추김치
-간식: 그릭요거트 1컵 + 아몬드 10알
-영양소: 단백질 120g / 탄수화물 150g / 지방 45g
+아침: 현미밥 1공기 + 닭가슴살 구이 100g + 시금치 무침 (350kcal)
+아침 영양소: 단백질 30g / 탄수화물 40g / 지방 8g
+점심: 연어 덮밥 1인분 + 계란국 (500kcal)
+점심 영양소: 단백질 40g / 탄수화물 50g / 지방 15g
+저녁: 고등어 구이 1마리 + 두부조림 + 배추김치 (450kcal)
+저녁 영양소: 단백질 35g / 탄수화물 35g / 지방 18g
+간식: 그릭요거트 1컵 + 아몬드 10알 (200kcal)
+간식 영양소: 단백질 15g / 탄수화물 25g / 지방 4g
 """
         
         # 6. GPT API 호출
@@ -286,9 +298,14 @@ class DietRecommendationService:
         Returns:
             dict or None: 파싱된 식단 정보
         """
+        import re
+        
         lines = section.split('\n')
         plan = {}
         meals = {}
+        meal_details = {}  # 끼니별 상세 정보 (칼로리, 영양소)
+        
+        current_meal_type = None  # 현재 파싱 중인 끼니 타입
         
         for line in lines:
             line = line.strip()
@@ -307,21 +324,129 @@ class DietRecommendationService:
                 elif key == "총 칼로리":
                     plan["totalCalories"] = value
                 elif key == "아침":
-                    meals["breakfast"] = value
+                    current_meal_type = "breakfast"
+                    # 메뉴 텍스트에서 칼로리 추출 시도 (예: "메뉴 (350kcal)")
+                    menu_text, calories = self._extract_menu_and_calories(value)
+                    meals["breakfast"] = menu_text
+                    if "breakfast" not in meal_details:
+                        meal_details["breakfast"] = {}
+                    meal_details["breakfast"]["calories"] = calories
+                elif key == "아침 영양소":
+                    if "breakfast" not in meal_details:
+                        meal_details["breakfast"] = {}
+                    protein, carb, fat = self._extract_nutrients(value)
+                    meal_details["breakfast"]["protein"] = protein
+                    meal_details["breakfast"]["carb"] = carb
+                    meal_details["breakfast"]["fat"] = fat
                 elif key == "점심":
-                    meals["lunch"] = value
+                    current_meal_type = "lunch"
+                    menu_text, calories = self._extract_menu_and_calories(value)
+                    meals["lunch"] = menu_text
+                    if "lunch" not in meal_details:
+                        meal_details["lunch"] = {}
+                    meal_details["lunch"]["calories"] = calories
+                elif key == "점심 영양소":
+                    if "lunch" not in meal_details:
+                        meal_details["lunch"] = {}
+                    protein, carb, fat = self._extract_nutrients(value)
+                    meal_details["lunch"]["protein"] = protein
+                    meal_details["lunch"]["carb"] = carb
+                    meal_details["lunch"]["fat"] = fat
                 elif key == "저녁":
-                    meals["dinner"] = value
+                    current_meal_type = "dinner"
+                    menu_text, calories = self._extract_menu_and_calories(value)
+                    meals["dinner"] = menu_text
+                    if "dinner" not in meal_details:
+                        meal_details["dinner"] = {}
+                    meal_details["dinner"]["calories"] = calories
+                elif key == "저녁 영양소":
+                    if "dinner" not in meal_details:
+                        meal_details["dinner"] = {}
+                    protein, carb, fat = self._extract_nutrients(value)
+                    meal_details["dinner"]["protein"] = protein
+                    meal_details["dinner"]["carb"] = carb
+                    meal_details["dinner"]["fat"] = fat
                 elif key == "간식":
-                    meals["snack"] = value
-                elif key == "영양소":
-                    plan["nutrients"] = value
+                    current_meal_type = "snack"
+                    menu_text, calories = self._extract_menu_and_calories(value)
+                    meals["snack"] = menu_text
+                    if "snack" not in meal_details:
+                        meal_details["snack"] = {}
+                    meal_details["snack"]["calories"] = calories
+                elif key == "간식 영양소":
+                    if "snack" not in meal_details:
+                        meal_details["snack"] = {}
+                    protein, carb, fat = self._extract_nutrients(value)
+                    meal_details["snack"]["protein"] = protein
+                    meal_details["snack"]["carb"] = carb
+                    meal_details["snack"]["fat"] = fat
         
         if plan.get("name") and meals:
             plan["meals"] = meals
+            # meal_details를 dict 형식으로 변환 (Pydantic이 자동으로 AllMealDetails로 변환)
+            if meal_details:
+                plan["meal_details"] = meal_details
             return plan
         
         return None
+    
+    def _extract_menu_and_calories(self, text: str) -> tuple[str, float]:
+        """
+        메뉴 텍스트에서 메뉴명과 칼로리를 추출
+        
+        Args:
+            text: "메뉴 설명 (350kcal)" 형식
+        
+        Returns:
+            (메뉴명, 칼로리)
+        """
+        import re
+        
+        # 칼로리 패턴 찾기: (숫자kcal) 또는 (숫자 kcal)
+        calorie_pattern = r'\((\d+(?:\.\d+)?)\s*kcal\)'
+        match = re.search(calorie_pattern, text, re.IGNORECASE)
+        
+        if match:
+            calories = float(match.group(1))
+            # 칼로리 부분 제거하고 메뉴명만 추출
+            menu_text = re.sub(calorie_pattern, '', text, flags=re.IGNORECASE).strip()
+            return menu_text, calories
+        else:
+            # 칼로리 정보가 없으면 0으로 반환
+            return text, 0.0
+    
+    def _extract_nutrients(self, text: str) -> tuple[float, float, float]:
+        """
+        영양소 텍스트에서 단백질/탄수화물/지방 추출
+        
+        Args:
+            text: "단백질 30g / 탄수화물 40g / 지방 8g" 형식
+        
+        Returns:
+            (단백질, 탄수화물, 지방)
+        """
+        import re
+        
+        protein = 0.0
+        carb = 0.0
+        fat = 0.0
+        
+        # 단백질 추출
+        protein_match = re.search(r'단백질\s*(\d+(?:\.\d+)?)\s*g', text, re.IGNORECASE)
+        if protein_match:
+            protein = float(protein_match.group(1))
+        
+        # 탄수화물 추출
+        carb_match = re.search(r'탄수화물\s*(\d+(?:\.\d+)?)\s*g', text, re.IGNORECASE)
+        if carb_match:
+            carb = float(carb_match.group(1))
+        
+        # 지방 추출
+        fat_match = re.search(r'지방\s*(\d+(?:\.\d+)?)\s*g', text, re.IGNORECASE)
+        if fat_match:
+            fat = float(fat_match.group(1))
+        
+        return protein, carb, fat
 
 
 # 싱글톤 인스턴스

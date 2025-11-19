@@ -34,13 +34,30 @@ class MealInfo(BaseModel):
     snack: str = Field(description="간식 메뉴")
 
 
+class MealDetails(BaseModel):
+    """끼니별 상세 영양 정보"""
+    calories: float = Field(description="칼로리 (kcal)")
+    protein: float = Field(description="단백질 (g)")
+    carb: float = Field(description="탄수화물 (g)")
+    fat: float = Field(description="지방 (g)")
+
+
+class AllMealDetails(BaseModel):
+    """전체 끼니별 상세 정보"""
+    breakfast: Optional[MealDetails] = Field(default=None, description="아침 상세 정보")
+    lunch: Optional[MealDetails] = Field(default=None, description="점심 상세 정보")
+    dinner: Optional[MealDetails] = Field(default=None, description="저녁 상세 정보")
+    snack: Optional[MealDetails] = Field(default=None, description="간식 상세 정보")
+
+
 class DietPlanOption(BaseModel):
     """식단 옵션 (A/B/C 중 하나)"""
     name: str = Field(description="식단 이름 (예: 고단백 식단)")
     description: str = Field(description="식단 설명")
     totalCalories: str = Field(description="총 칼로리 (예: 1500 kcal)")
     meals: MealInfo = Field(description="끼니별 식사 정보")
-    nutrients: str = Field(description="영양소 정보 (단백질/탄수화물/지방)")
+    nutrients: Optional[str] = Field(default=None, description="영양소 정보 (단백질/탄수화물/지방) - 구버전 호환용")
+    meal_details: Optional[AllMealDetails] = Field(default=None, description="끼니별 상세 영양 정보")
 
 
 class DietPlanResponse(BaseModel):
