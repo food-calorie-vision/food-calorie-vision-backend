@@ -1,7 +1,7 @@
 """API v1 라우터 - ERDCloud 스키마 기반"""
 from fastapi import APIRouter
 
-from app.api.v1.routes import auth, users, vision, customer_service, ingredients, meals, recommend
+from app.api.v1.routes import auth, users, vision, customer_service, ingredients, meals, recommend, recipes
 
 api_router = APIRouter()
 
@@ -25,6 +25,9 @@ api_router.include_router(customer_service.router, tags=["customer-service"])
 
 # 식단 추천 라우트
 api_router.include_router(recommend.router, tags=["recommendations"])
+
+# 레시피 추천 라우트
+api_router.include_router(recipes.router, tags=["recipes"])
 
 # TODO: 새로운 ERDCloud 기반 라우트 추가 예정
 # - UserFoodHistory 라우트

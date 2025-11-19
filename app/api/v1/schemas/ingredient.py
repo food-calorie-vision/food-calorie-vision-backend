@@ -39,3 +39,4 @@ class RecommendationData(BaseModel):
     total_ingredients: int = Field(..., description="전체 보유 식재료 개수")
 
 
+

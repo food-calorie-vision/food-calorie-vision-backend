@@ -14,3 +14,4 @@ CREATE TABLE IF NOT EXISTS `UserIngredient` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='사용자 식재료 테이블';
 
 
+

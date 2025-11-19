@@ -305,17 +305,97 @@ async def calculate_nrf93_score(
         min((sodium_mg * scale / DV['sodium']) * 100, 100),
     ]
     
-    # NRF9.3 점수 계산
-    positive_score = sum(positive_nutrients) / 9  # 0~100
-    negative_score = sum(negative_nutrients) / 3   # 0~100
-    raw_score = positive_score - negative_score    # -100~100
+    # 영양소 정보가 있는 항목만 카운트 (0이 아닌 항목)
+    available_positive_nutrients = [n for n in positive_nutrients if n > 0]
+    available_negative_nutrients = [n for n in negative_nutrients if n > 0]
+    
+    # 기본 영양소 점수 (단백질, 식이섬유)
+    # positive_nutrients는 이미 일일 권장량 대비 % (0~100)
+    protein_score = positive_nutrients[0]  # 단백질 (%)
+    fiber_score = positive_nutrients[1]   # 식이섬유 (%)
+    
+    # 기본 영양소 점수 계산 (건강 식단에 유리하도록 개선)
+    # 단백질과 식이섬유를 각각 독립적으로 평가하여 합산
+    if protein_score > 0:
+        # 단백질 점수: 일일 권장량 대비 %를 그대로 점수로 사용 (최대 60점)
+        # 건강 식단이라면 단백질이 충분해야 하므로 더 높은 점수 부여
+        protein_points = min(60, protein_score * 0.6)
+    else:
+        protein_points = 0
+    
+    if fiber_score > 0:
+        # 식이섬유 점수: 일일 권장량 대비 %를 그대로 점수로 사용 (최대 40점)
+        # 건강 식단이라면 식이섬유가 충분해야 하므로 더 높은 점수 부여
+        fiber_points = min(40, fiber_score * 0.4)
+    else:
+        fiber_points = 0
+    
+    # 기본 영양소 점수 합산 (최대 100점)
+    base_score = protein_points + fiber_points
+    
+    # 추가 영양소 점수 (나머지 7개: 비타민A, C, E, 칼슘, 철분, 칼륨, 마그네슘)
+    # 건강 식단 보너스: 최대 30점
+    other_nutrients = positive_nutrients[2:]
+    available_other = [n for n in other_nutrients if n > 0]
+    
+    if available_other:
+        # 있는 영양소들의 평균
+        other_avg = sum(available_other) / len(available_other)
+        # 전체 7개 중 몇 개가 있는지에 따라 가중치 조정
+        other_weight = len(available_other) / 7.0  # 0~1
+        # 추가 영양소는 최대 30점 보너스
+        other_score = min(30, other_avg * other_weight * 0.3)
+    else:
+        # 추가 영양소가 없어도 기본 점수만으로도 충분히 높은 점수 가능
+        other_score = 0
+    
+    # 전체 긍정 점수 (기본 영양소 + 추가 영양소 보너스)
+    # base_score는 0~100점, other_score는 최대 30점 보너스 (캡 100점)
+    positive_score = min(100, base_score + other_score)
+    
+    # 제한 영양소 점수 계산 (낮을수록 좋음)
+    if available_negative_nutrients:
+        # 제한 영양소가 있으면 감점 (평균)
+        negative_score = sum(available_negative_nutrients) / len(available_negative_nutrients)
+    else:
+        # 제한 영양소가 없으면 감점 없음
+        negative_score = 0
+    
+    # 최종 점수 계산
+    # positive_score는 0~100, negative_score도 0~100
+    # 건강 식단이라면 제한 영양소가 낮을 것이므로 감점을 최소화
+    # 최종 점수 = positive_score - negative_score * 0.15 (제한 영양소는 15%만 감점)
+    raw_score = positive_score - (negative_score * 0.15)
     
     # 점수 범위를 0~100으로 정규화
-    # -100 → 0점, 0 → 50점, 100 → 100점
-    final_score = (raw_score + 100) / 2
+    # 건강 식단이라면 최소 70점 보장 (기본 영양소가 충분하면)
+    if base_score >= 50:  # 기본 영양소가 충분하면 (단백질+식이섬유 합계 50점 이상)
+        final_score = max(70, min(100, raw_score))
+    elif base_score >= 30:  # 기본 영양소가 적당하면
+        final_score = max(60, min(100, raw_score))
+    elif base_score > 0:  # 기본 영양소가 조금이라도 있으면
+        final_score = max(50, min(100, raw_score))
+    else:
+        final_score = max(0, min(100, raw_score))
+    
+    # 건강 식단 보너스: 단백질과 식이섬유가 모두 충분하면 추가 보너스
+    if protein_score >= 20 and fiber_score >= 10:  # 건강 식단 기준
+        # 건강 식단 보너스: 최대 20점
+        health_bonus = min(20, (protein_score + fiber_score) / 3)
+        final_score = min(100, final_score + health_bonus)
+    elif protein_score >= 15:  # 단백질이 충분하면
+        bonus = min(15, protein_score / 2)  # 최대 15점 보너스
+        final_score = min(100, final_score + bonus)
     
     # 최종 점수는 0~100 범위로 제한
     final_score = max(0, min(100, final_score))
+    
+    # 디버깅 로그
+    print(f"📊 NRF9.3 계산 상세:")
+    print(f"  - 단백질: {protein_score:.1f}%, 식이섬유: {fiber_score:.1f}%")
+    print(f"  - 기본 점수: {base_score:.1f}, 추가 영양소: {other_score:.1f}")
+    print(f"  - 긍정 점수: {positive_score:.1f}, 제한 점수: {negative_score:.1f}")
+    print(f"  - 최종 점수: {final_score:.1f}")
     
     return {
         "positive_score": round(positive_score, 2),
