@@ -1,6 +1,6 @@
 """음식 기록 및 건강 점수 관리 API"""
 import os
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -83,10 +83,30 @@ class DashboardStatsResponse(BaseModel):
     """대시보드 통계 응답"""
     total_calories_today: int = Field(..., description="오늘 총 칼로리")
     total_calories_week: int = Field(..., description="이번 주 총 칼로리")
-    avg_health_score: float = Field(..., description="평균 건강 점수")
+    avg_health_score: float = Field(..., description="오늘 평균 건강 점수")
+    previous_day_score: Optional[float] = Field(None, description="전날 평균 건강 점수")
+    score_change: Optional[float] = Field(None, description="전날 대비 점수 변화")
     frequent_foods: List[dict] = Field(..., description="자주 먹는 음식 Top 5")
     daily_calories: List[dict] = Field(..., description="일일 칼로리 (최근 7일)")
     nutrition_balance: dict = Field(..., description="영양소 밸런스")
+
+
+class CategoryScore(BaseModel):
+    """카테고리별 점수"""
+    name: str = Field(..., description="카테고리 이름")
+    score: float = Field(..., description="점수")
+    max_score: float = Field(100.0, description="최대 점수")
+    trend: str = Field(..., description="트렌드: up, down, same")
+    feedback: str = Field(..., description="피드백 메시지")
+
+
+class ScoreDetailResponse(BaseModel):
+    """상세 점수 현황 응답"""
+    overall_score: float = Field(..., description="전체 점수")
+    previous_score: Optional[float] = Field(None, description="전날 점수")
+    score_change: Optional[float] = Field(None, description="점수 변화")
+    categories: List[CategoryScore] = Field(..., description="카테고리별 점수")
+    weekly_trend: List[dict] = Field(..., description="주간 트렌드")
 
 
 # ========== API 엔드포인트 ==========
@@ -234,14 +254,37 @@ async def get_dashboard_stats(
         # 2. 이번 주 총 칼로리 (일요일 시작)
         # TODO: 주 시작일 계산 로직 추가
         
-        # 3. 평균 건강 점수
-        avg_stmt = select(func.avg(HealthScore.final_score)).where(
-            HealthScore.user_id == user_id
+        # 3. 오늘 평균 건강 점수
+        today_avg_stmt = select(func.avg(HealthScore.final_score)).join(
+            UserFoodHistory, HealthScore.history_id == UserFoodHistory.history_id
+        ).where(
+            and_(
+                HealthScore.user_id == user_id,
+                func.date(UserFoodHistory.consumed_at) == today
+            )
         )
-        avg_result = await session.execute(avg_stmt)
-        avg_health_score = avg_result.scalar() or 0
+        today_avg_result = await session.execute(today_avg_stmt)
+        avg_health_score = today_avg_result.scalar() or 0
         
-        # 4. 자주 먹는 음식 Top 5
+        # 4. 전날 평균 건강 점수
+        yesterday = today - timedelta(days=1)
+        yesterday_avg_stmt = select(func.avg(HealthScore.final_score)).join(
+            UserFoodHistory, HealthScore.history_id == UserFoodHistory.history_id
+        ).where(
+            and_(
+                HealthScore.user_id == user_id,
+                func.date(UserFoodHistory.consumed_at) == yesterday
+            )
+        )
+        yesterday_avg_result = await session.execute(yesterday_avg_stmt)
+        previous_day_score = yesterday_avg_result.scalar()
+        
+        # 전날 대비 점수 변화 계산
+        score_change = None
+        if previous_day_score is not None and avg_health_score > 0:
+            score_change = round(avg_health_score - previous_day_score, 1)
+        
+        # 5. 자주 먹는 음식 Top 5
         frequent_stmt = select(
             UserFoodHistory.food_name,
             func.count(UserFoodHistory.food_name).label('count')
@@ -259,8 +302,7 @@ async def get_dashboard_stats(
             for row in frequent_result.all()
         ]
         
-        # 5. 최근 7일 일일 칼로리
-        from datetime import timedelta
+        # 6. 최근 7일 일일 칼로리
         seven_days_ago = today - timedelta(days=6)  # 오늘 포함 7일
         
         daily_stmt = select(
@@ -294,7 +336,7 @@ async def get_dashboard_stats(
                 "calories": calories
             })
         
-        # 6. 이번 주 총 칼로리 (지난 7일 합계)
+        # 7. 이번 주 총 칼로리 (지난 7일 합계)
         total_calories_week = sum(item["calories"] for item in daily_calories)
         
         return ApiResponse(
@@ -303,6 +345,8 @@ async def get_dashboard_stats(
                 total_calories_today=int(total_calories_today),
                 total_calories_week=total_calories_week,
                 avg_health_score=float(avg_health_score),
+                previous_day_score=float(previous_day_score) if previous_day_score is not None else None,
+                score_change=score_change,
                 frequent_foods=frequent_foods,
                 daily_calories=daily_calories,
                 nutrition_balance={}  # TODO: 추후 구현
@@ -652,4 +696,298 @@ async def save_recommended_meal(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"추천 음식 저장 중 오류 발생: {str(e)}")
+
+
+@router.get("/score-detail", response_model=ApiResponse[ScoreDetailResponse])
+async def get_score_detail(
+    session: AsyncSession = Depends(get_session)
+) -> ApiResponse[ScoreDetailResponse]:
+    """
+    상세 점수 현황 조회
+    
+    - 오늘 전체 점수
+    - 전날 대비 점수 변화
+    - 카테고리별 점수 (칼로리 균형, 영양소 균형, 식사 패턴 등)
+    - 주간 트렌드
+    
+    **Args:**
+        session: DB 세션
+        
+    **Returns:**
+        상세 점수 현황 데이터
+    """
+    try:
+        user_id = get_current_user_id()
+        today = datetime.now().date()
+        yesterday = today - timedelta(days=1)
+        
+        # 1. 오늘 전체 평균 점수
+        today_score_stmt = select(func.avg(HealthScore.final_score)).join(
+            UserFoodHistory, HealthScore.history_id == UserFoodHistory.history_id
+        ).where(
+            and_(
+                HealthScore.user_id == user_id,
+                func.date(UserFoodHistory.consumed_at) == today
+            )
+        )
+        today_score_result = await session.execute(today_score_stmt)
+        overall_score = today_score_result.scalar() or 0
+        
+        # 2. 전날 평균 점수
+        yesterday_score_stmt = select(func.avg(HealthScore.final_score)).join(
+            UserFoodHistory, HealthScore.history_id == UserFoodHistory.history_id
+        ).where(
+            and_(
+                HealthScore.user_id == user_id,
+                func.date(UserFoodHistory.consumed_at) == yesterday
+            )
+        )
+        yesterday_score_result = await session.execute(yesterday_score_stmt)
+        previous_score = yesterday_score_result.scalar()
+        
+        score_change = None
+        if previous_score is not None:
+            score_change = round(overall_score - previous_score, 1)
+        
+        # 3. 오늘 섭취한 음식들의 영양소 정보 조회
+        today_foods_stmt = select(
+            HealthScore.kcal,
+            HealthScore.final_score,
+            FoodNutrient.protein,
+            FoodNutrient.carb,
+            FoodNutrient.fat,
+            FoodNutrient.fiber,
+            FoodNutrient.sodium,
+            FoodNutrient.saturated_fat,
+            FoodNutrient.added_sugar
+        ).join(
+            UserFoodHistory, HealthScore.history_id == UserFoodHistory.history_id
+        ).outerjoin(
+            FoodNutrient, UserFoodHistory.food_id == FoodNutrient.food_id
+        ).where(
+            and_(
+                HealthScore.user_id == user_id,
+                func.date(UserFoodHistory.consumed_at) == today
+            )
+        )
+        
+        foods_result = await session.execute(today_foods_stmt)
+        foods_data = foods_result.all()
+        
+        # 4. 사용자 정보 조회 (목표 칼로리 등)
+        user_stmt = select(User).where(User.user_id == user_id)
+        user_result = await session.execute(user_stmt)
+        user = user_result.scalar_one_or_none()
+        
+        # 목표 칼로리 계산 (BMR 기반, 간단한 추정)
+        target_calories = 2000  # 기본값
+        if user and user.weight and user.age and user.gender:
+            # 간단한 BMR 계산 (Mifflin-St Jeor)
+            if user.gender == 'M':
+                bmr = 10 * float(user.weight) + 6.25 * (user.age or 30) - 5 * (user.age or 30) + 5
+            else:
+                bmr = 10 * float(user.weight) + 6.25 * (user.age or 30) - 5 * (user.age or 30) - 161
+            
+            # 활동 수준에 따른 TDEE (기본: 중간 활동)
+            tdee = bmr * 1.55
+            
+            # 건강 목표에 따른 조정
+            if user.health_goal == 'loss':
+                target_calories = int(tdee * 0.85)  # 15% 감소
+            elif user.health_goal == 'gain':
+                target_calories = int(tdee * 1.15)  # 15% 증가
+            else:
+                target_calories = int(tdee)
+        
+        # 5. 카테고리별 점수 계산
+        categories = []
+        
+        if foods_data:
+            # 총 칼로리
+            total_calories = sum(row[0] or 0 for row in foods_data)
+            # 칼로리 균형 점수 (목표 대비 90-110% = 100점, 그 외는 감점)
+            calorie_ratio = (total_calories / target_calories * 100) if target_calories > 0 else 0
+            if 90 <= calorie_ratio <= 110:
+                calorie_score = 100
+            elif 80 <= calorie_ratio < 90 or 110 < calorie_ratio <= 120:
+                calorie_score = 80
+            elif 70 <= calorie_ratio < 80 or 120 < calorie_ratio <= 130:
+                calorie_score = 60
+            else:
+                calorie_score = max(0, 100 - abs(calorie_ratio - 100))
+            
+            calorie_trend = 'same'
+            if previous_score is not None:
+                # 전날 칼로리 비교는 별도로 계산 필요하지만, 간단히 점수 기반으로 판단
+                calorie_trend = 'up' if overall_score > previous_score else 'down' if overall_score < previous_score else 'same'
+            
+            # 칼로리 피드백 메시지 생성
+            if 90 <= calorie_ratio <= 110:
+                calorie_feedback = f"목표 칼로리 {target_calories}kcal 대비 {total_calories:.0f}kcal 섭취. 적절한 칼로리 섭취량입니다."
+            elif calorie_ratio < 90:
+                calorie_feedback = f"목표 칼로리 {target_calories}kcal 대비 {total_calories:.0f}kcal 섭취. 칼로리 섭취량이 부족합니다."
+            else:
+                calorie_feedback = f"목표 칼로리 {target_calories}kcal 대비 {total_calories:.0f}kcal 섭취. 칼로리 섭취량이 초과입니다."
+            
+            categories.append(CategoryScore(
+                name="칼로리 균형",
+                score=round(calorie_score, 1),
+                max_score=100.0,
+                trend=calorie_trend,
+                feedback=calorie_feedback
+            ))
+            
+            # 영양소 균형 점수 (단백질, 탄수화물, 지방 비율)
+            total_protein = sum(row[2] or 0 for row in foods_data)
+            total_carbs = sum(row[3] or 0 for row in foods_data)
+            total_fat = sum(row[4] or 0 for row in foods_data)
+            total_macros = total_protein + total_carbs + total_fat
+            
+            if total_macros > 0:
+                protein_ratio = (total_protein / total_macros) * 100
+                carbs_ratio = (total_carbs / total_macros) * 100
+                fat_ratio = (total_fat / total_macros) * 100
+                
+                # 권장 비율: 단백질 15-20%, 탄수화물 50-60%, 지방 20-30%
+                nutrition_score = 100
+                if not (15 <= protein_ratio <= 25):
+                    nutrition_score -= 10
+                if not (45 <= carbs_ratio <= 65):
+                    nutrition_score -= 10
+                if not (20 <= fat_ratio <= 35):
+                    nutrition_score -= 10
+                nutrition_score = max(0, nutrition_score)
+            else:
+                nutrition_score = 0
+            
+            # 영양소 균형 피드백 메시지 생성
+            if nutrition_score >= 80:
+                nutrition_feedback = f"단백질 {total_protein:.1f}g, 탄수화물 {total_carbs:.1f}g, 지방 {total_fat:.1f}g. 균형 잡힌 영양소 비율입니다."
+            else:
+                nutrition_feedback = f"단백질 {total_protein:.1f}g, 탄수화물 {total_carbs:.1f}g, 지방 {total_fat:.1f}g. 영양소 비율이 불균형합니다."
+            
+            categories.append(CategoryScore(
+                name="영양소 균형",
+                score=round(nutrition_score, 1),
+                max_score=100.0,
+                trend=calorie_trend,
+                feedback=nutrition_feedback
+            ))
+            
+            # 식이섬유 점수
+            total_fiber = sum(row[5] or 0 for row in foods_data)
+            fiber_target = 25.0  # 일일 권장량
+            fiber_score = min(100, (total_fiber / fiber_target) * 100) if fiber_target > 0 else 0
+            
+            # 식이섬유 피드백 메시지 생성
+            if fiber_score >= 80:
+                fiber_feedback = f"식이섬유 {total_fiber:.1f}g 섭취. 충분한 섭취량입니다."
+            else:
+                fiber_feedback = f"식이섬유 {total_fiber:.1f}g 섭취. 섭취량이 부족합니다. 채소와 과일을 더 섭취해보세요."
+            
+            categories.append(CategoryScore(
+                name="식이섬유",
+                score=round(fiber_score, 1),
+                max_score=100.0,
+                trend='same',
+                feedback=fiber_feedback
+            ))
+            
+            # 나트륨 점수 (낮을수록 좋음)
+            total_sodium = sum(row[6] or 0 for row in foods_data)
+            sodium_target = 2000.0  # 일일 권장량
+            sodium_ratio = (total_sodium / sodium_target) * 100 if sodium_target > 0 else 0
+            sodium_score = max(0, 100 - sodium_ratio)  # 낮을수록 좋으므로 역산
+            
+            # 나트륨 피드백 메시지 생성
+            if sodium_score >= 70:
+                sodium_feedback = f"나트륨 {total_sodium:.0f}mg 섭취. 적절한 수준입니다."
+            else:
+                sodium_feedback = f"나트륨 {total_sodium:.0f}mg 섭취. 나트륨 섭취량이 초과입니다. 저염식을 권장합니다."
+            
+            categories.append(CategoryScore(
+                name="나트륨 관리",
+                score=round(sodium_score, 1),
+                max_score=100.0,
+                trend='same',
+                feedback=sodium_feedback
+            ))
+            
+            # 포화지방 점수 (낮을수록 좋음)
+            total_saturated_fat = sum(row[7] or 0 for row in foods_data)
+            saturated_fat_target = 15.0  # 일일 권장량
+            saturated_fat_ratio = (total_saturated_fat / saturated_fat_target) * 100 if saturated_fat_target > 0 else 0
+            saturated_fat_score = max(0, 100 - saturated_fat_ratio)
+            
+            # 포화지방 피드백 메시지 생성
+            if saturated_fat_score >= 70:
+                saturated_fat_feedback = f"포화지방 {total_saturated_fat:.1f}g 섭취. 적절한 수준입니다."
+            else:
+                saturated_fat_feedback = f"포화지방 {total_saturated_fat:.1f}g 섭취. 포화지방 섭취량이 초과입니다. 섭취를 줄여보세요."
+            
+            categories.append(CategoryScore(
+                name="포화지방 관리",
+                score=round(saturated_fat_score, 1),
+                max_score=100.0,
+                trend='same',
+                feedback=saturated_fat_feedback
+            ))
+        else:
+            # 데이터 없음
+            categories.append(CategoryScore(
+                name="칼로리 균형",
+                score=0.0,
+                max_score=100.0,
+                trend='same',
+                feedback="오늘 식사 기록이 없습니다."
+            ))
+        
+        # 6. 주간 트렌드 (최근 7일)
+        seven_days_ago = today - timedelta(days=6)
+        weekly_trend_stmt = select(
+            func.date(UserFoodHistory.consumed_at).label('date'),
+            func.avg(HealthScore.final_score).label('avg_score')
+        ).join(
+            HealthScore, UserFoodHistory.history_id == HealthScore.history_id
+        ).where(
+            and_(
+                UserFoodHistory.user_id == user_id,
+                func.date(UserFoodHistory.consumed_at) >= seven_days_ago,
+                func.date(UserFoodHistory.consumed_at) <= today
+            )
+        ).group_by(
+            func.date(UserFoodHistory.consumed_at)
+        ).order_by(
+            func.date(UserFoodHistory.consumed_at)
+        )
+        
+        weekly_result = await session.execute(weekly_trend_stmt)
+        weekly_data = {row[0]: row[1] for row in weekly_result.all()}
+        
+        weekly_trend = []
+        for i in range(7):
+            date = seven_days_ago + timedelta(days=i)
+            score = weekly_data.get(date, 0)
+            weekly_trend.append({
+                "date": date.strftime("%m-%d"),
+                "score": round(float(score), 1) if score else 0
+            })
+        
+        return ApiResponse(
+            success=True,
+            data=ScoreDetailResponse(
+                overall_score=round(float(overall_score), 1),
+                previous_score=round(float(previous_score), 1) if previous_score is not None else None,
+                score_change=score_change,
+                categories=categories,
+                weekly_trend=weekly_trend
+            ),
+            message="✅ 상세 점수 현황 조회 완료"
+        )
+        
+    except Exception as e:
+        print(f"❌ 상세 점수 현황 조회 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"상세 점수 현황 조회 중 오류 발생: {str(e)}")
 

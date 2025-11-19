@@ -1,19 +1,20 @@
 """식단 추천 서비스 - GPT 기반 건강 목표별 식단 추천"""
-import os
 from typing import Optional
 from openai import AsyncOpenAI
 
+from app.core.config import get_settings
 from app.db.models import User
+
+settings = get_settings()
 
 
 class DietRecommendationService:
     """GPT를 활용한 개인 맞춤 식단 추천 서비스"""
     
     def __init__(self):
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
+        if not settings.openai_api_key:
             raise ValueError("❌ OPENAI_API_KEY 환경 변수가 설정되지 않았습니다.")
-        self.client = AsyncOpenAI(api_key=api_key)
+        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
     
     def calculate_bmr(self, gender: str, age: int, weight: float, height: Optional[float] = None) -> float:
         """
