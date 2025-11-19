@@ -2,24 +2,29 @@
 
 FastAPI 기반 음식 칼로리 비전 백엔드 서비스
 
-> 📝 **최신 업데이트 (2025-11-10)**: YOLO + GPT-Vision 음식 분석 파이프라인 구축  
-> 자세한 내용은 [CHANGELOG.md](./CHANGELOG.md)를 참고하세요.
+> 📝 **최신 업데이트 (2024-11-19)**: 추천 식단 전용 테이블 추가 (DietPlan, DietPlanMeal)  
+> 자세한 내용은 [migrations/README_DIET_PLAN_TABLES.md](./migrations/README_DIET_PLAN_TABLES.md)를 참고하세요.
 
 ## 개요
 
-이 백엔드는 ERDCloud 설계 기반으로 재구성되었으며, **YOLO11n 객체 detection**과 **GPT-Vision 이미지 분석**을 결합한 고급 음식 분석 시스템을 제공합니다.
+이 백엔드는 ERDCloud 설계 기반으로 재구성되었으며, **GPT-4o Vision 음식 분석**, **GPT-4o 식단 추천**, **식약처 영양 데이터**를 결합한 통합 헬스케어 시스템을 제공합니다.
 
 ## 주요 기능
 
 - 🔐 **이메일 기반 인증**: 안전한 사용자 로그인/로그아웃 관리 (세션 기반)
-- 👤 **사용자 관리**: ERDCloud 스키마 기반 사용자 정보 관리
+- 👤 **사용자 관리**: ERDCloud 스키마 기반 사용자 정보 관리 (gender, age, weight, height, health_goal)
+- 📸 **AI 음식 분석**: GPT-4o Vision 기반 이미지 분석
+  - 음식명, 재료, 영양소 자동 인식
+  - 4개 후보 제공 + 사용자 선택 기능
+  - 식약처 DB 매칭으로 정확한 영양소 조회
 - 🍽️ **음식 섭취 기록**: UserFoodHistory를 통한 식단 기록
-- 📊 **건강 점수**: 음식별 영양 점수 계산 및 관리
+- 🥗 **AI 식단 추천**: 사용자 맞춤형 식단 추천 시스템
+  - Harris-Benedict 공식 기반 BMR/TDEE 계산
+  - 건강 목표별 목표 칼로리 산출 (증량/유지/감량)
+  - GPT-4o가 3가지 식단 옵션 제공
+  - 전용 테이블(DietPlan, DietPlanMeal)로 체계적 관리
+- 📊 **영양소 점수**: NRF9.3 기반 음식 건강 점수 계산
 - 📈 **건강 리포트**: 일일/주간/월간 건강 리포트 생성
-- 🤖 **AI 음식 분석**: YOLO11n + GPT-Vision 파이프라인
-  - YOLO로 음식 객체 detection
-  - GPT-Vision으로 상세 영양 정보 분석
-  - 실시간 건강 제안 제공
 
 ## 기술 스택
 
@@ -232,17 +237,29 @@ curl -X POST "http://localhost:8000/api/v1/food/analysis-upload" \
 - `GET /api/v1/auth/me` - 현재 사용자 정보 (닉네임, username 등)
 
 ### 사용자
-- `GET /api/v1/user/*` - 사용자 관련 API
+- `GET /api/v1/user/info` - 사용자 기본 정보
+- `GET /api/v1/user/health-info` - 사용자 건강 정보 (gender, age, weight, height, health_goal)
+- `GET /api/v1/user/intake-data` - 사용자 섭취 데이터 (7일간)
+- `PUT /api/v1/user/profile` - 사용자 프로필 수정
 
-### 음식 이미지 분석
-- `POST /api/v1/food/analysis` - 음식 이미지 분석
+### 음식 이미지 분석 (GPT-4o Vision)
+- `POST /api/v1/food/analyze` - 음식 이미지 분석 (4개 후보 반환)
+- `POST /api/v1/food/reanalyze-with-selection` - 후보 선택 시 재분석
+- `POST /api/v1/food/save-food` - 음식 섭취 기록 저장
 
-### 🚧 개발 예정 (ERDCloud 기반)
-- `POST /api/v1/food-history` - 음식 섭취 기록
-- `GET /api/v1/food-history` - 섭취 기록 조회
-- `POST /api/v1/health-score` - 건강 점수 계산
+### 재료 기반 레시피 추천
+- `POST /api/v1/ingredients/analyze` - 재료 이미지 분석
+- `POST /api/v1/ingredients/recommend-recipes` - 재료 기반 레시피 추천
+
+### AI 식단 추천 (GPT-4o) ✨ NEW
+- `POST /api/v1/recommend/diet-plan` - 사용자 맞춤 식단 추천 (3가지 옵션)
+- `POST /api/v1/recommend/save-diet-plan` - 추천 식단 저장
+- `GET /api/v1/recommend/my-diet-plans` - 내 추천 식단 목록 조회
+- `GET /api/v1/recommend/diet-plans/{diet_plan_id}` - 식단 상세 조회
+
+### 건강 리포트
 - `GET /api/v1/health-report` - 건강 리포트 조회
-- `POST /api/v1/preferences` - 사용자 선호도 설정
+- `POST /api/v1/health-score` - 건강 점수 계산 (NRF9.3)
 
 ## 테스트
 
@@ -300,26 +317,34 @@ food-calorie-vision-backend/
 
 ### 완료됨 ✅
 - [x] 기본 프로젝트 구조
-- [x] API 라우터 및 스키마 정의
-- [x] 메모리 기반 스텁 핸들러
-- [x] 세션 기반 인증 시스템
-- [x] CORS 설정
-- [x] 단위 테스트 (23개 테스트 모두 통과)
-- [x] Next.js 프론트엔드와 통합
-- [x] 데이터베이스 모델 정의 (SQLAlchemy)
-- [x] 데이터베이스 마이그레이션 설정 (Alembic)
-- [x] MySQL 비동기 연결 설정
+- [x] ERDCloud 기반 DB 스키마 적용
+- [x] 세션 기반 인증 시스템 (이메일 로그인)
+- [x] MySQL 비동기 연결 설정 (SQLAlchemy + asyncmy)
+- [x] GPT-4o Vision 음식 이미지 분석
+  - [x] 4개 후보 제공 + 사용자 선택 기능
+  - [x] 식약처 DB 매칭으로 영양소 조회
+  - [x] 재료 추출 및 저장
+- [x] GPT-4o 기반 재료 레시피 추천
+- [x] GPT-4o 기반 AI 식단 추천 시스템
+  - [x] Harris-Benedict 공식 BMR/TDEE 계산
+  - [x] 건강 목표별 목표 칼로리 산출
+  - [x] 3가지 식단 옵션 제공
+  - [x] 추천 식단 전용 테이블 (DietPlan, DietPlanMeal)
+  - [x] 식단 저장 및 조회 API
+- [x] 음식 섭취 기록 저장 (UserFoodHistory)
+- [x] 사용자 건강 정보 조회 (gender, age, weight, height, health_goal)
+- [x] CORS 설정 (Next.js 프론트엔드 통합)
+- [x] Swagger/ReDoc API 문서화
 
 ### 진행 예정 🚧
-- [ ] 데이터베이스 CRUD 서비스 구현
-- [ ] 회원가입 및 비밀번호 해싱
-- [ ] 실제 DB 데이터 사용 (현재는 스텁)
+- [ ] NRF9.3 영양 점수 시스템 완성
+- [ ] 건강 리포트 생성 (일일/주간/월간)
+- [ ] 식단 진행률 추적 (섭취 여부 업데이트)
+- [ ] 대시보드 통계 API
 - [ ] Redis 세션 스토리지 (분산 환경용)
-- [ ] 실제 AI 비전 모델 통합
-- [ ] LLM 챗봇 통합 (OpenAI 등)
 - [ ] 로깅 및 모니터링
-- [ ] 통합 테스트
 - [ ] Docker 컨테이너화
+- [ ] 통합 테스트
 
 ## 개발 가이드
 
