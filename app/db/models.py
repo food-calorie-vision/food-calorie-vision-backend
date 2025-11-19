@@ -146,6 +146,72 @@ class Announcement(Base):
         return f"<Announcement(announcement_id={self.announcement_id}, title={self.title})>"
 
 
+class DietPlan(Base):
+    """추천 식단 메타데이터 테이블"""
+
+    __tablename__ = "DietPlan"
+
+    diet_plan_id: Mapped[str] = mapped_column(String(50), primary_key=True, comment='식단 ID (plan_xxx)')
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment='사용자 ID')
+
+    # 식단 정보
+    plan_name: Mapped[str] = mapped_column(String(100), nullable=False, comment='식단 이름 (예: 고단백 식단)')
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment='식단 설명')
+
+    # 계산된 영양 정보 (추천 당시 기준)
+    bmr: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True, comment='기초대사량 (kcal/day)')
+    tdee: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True, comment='1일 총 에너지 소비량 (kcal/day)')
+    target_calories: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True, comment='목표 칼로리 (kcal/day)')
+    health_goal: Mapped[Optional[str]] = mapped_column(Enum('gain', 'maintain', 'loss', name='diet_health_goal_enum'), nullable=True, comment='건강 목표')
+
+    # 총 영양소
+    total_calories: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True, comment='식단 총 칼로리')
+    total_protein: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True, comment='식단 총 단백질 (g)')
+    total_carb: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True, comment='식단 총 탄수화물 (g)')
+    total_fat: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True, comment='식단 총 지방 (g)')
+
+    # 메타데이터
+    gpt_response: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment='GPT 원문 응답')
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.current_timestamp(), comment='생성일시')
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment='현재 따르고 있는 식단 여부')
+
+    def __repr__(self) -> str:
+        return f"<DietPlan(diet_plan_id={self.diet_plan_id}, plan_name={self.plan_name}, user_id={self.user_id})>"
+
+
+class DietPlanMeal(Base):
+    """추천 식단 끼니별 상세 테이블"""
+
+    __tablename__ = "DietPlanMeal"
+
+    meal_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, comment='끼니 ID')
+    diet_plan_id: Mapped[str] = mapped_column(String(50), nullable=False, comment='식단 ID')
+
+    # 끼니 정보
+    meal_type: Mapped[str] = mapped_column(Enum('breakfast', 'lunch', 'dinner', 'snack', name='meal_type_enum'), nullable=False, comment='끼니 타입')
+    meal_name: Mapped[str] = mapped_column(String(200), nullable=False, comment='끼니 이름 (예: 고단백 식단 - 아침)')
+
+    # 음식 상세
+    food_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment='음식 설명')
+    ingredients: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, comment='재료 목록 (JSON 배열)')
+
+    # 영양소 (이 끼니의)
+    calories: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True, comment='칼로리 (kcal)')
+    protein: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True, comment='단백질 (g)')
+    carb: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True, comment='탄수화물 (g)')
+    fat: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True, comment='지방 (g)')
+
+    # 실제 섭취 여부
+    consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment='섭취 여부')
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment='섭취 일시')
+
+    # 연결된 UserFoodHistory ID (섭취 시 기록)
+    history_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, comment='연결된 섭취 기록 ID')
+
+    def __repr__(self) -> str:
+        return f"<DietPlanMeal(meal_id={self.meal_id}, meal_name={self.meal_name}, consumed={self.consumed})>"
+
+
 class Inquiry(Base):
     """문의하기 테이블"""
 

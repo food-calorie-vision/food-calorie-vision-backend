@@ -1,5 +1,6 @@
 """식단 추천 API 스키마"""
 from typing import Optional
+from datetime import datetime
 from pydantic import BaseModel, Field
 
 
@@ -54,4 +55,59 @@ class DietPlanResponse(BaseModel):
     
     class Config:
         populate_by_name = True
+
+
+class SaveMealRequest(BaseModel):
+    """저장할 끼니 정보"""
+    food_name: str = Field(description="음식명 (예: '균형 잡힌 식단 - 아침')")
+    meal_type: str = Field(description="끼니 타입 (breakfast/lunch/dinner/snack)")
+    ingredients: list[str] = Field(description="재료 목록")
+    calories: float = Field(description="칼로리 (kcal)")
+    protein: float = Field(default=0, description="단백질 (g)")
+    carb: float = Field(default=0, description="탄수화물 (g)")
+    fat: float = Field(default=0, description="지방 (g)")
+    consumed_at: Optional[datetime] = Field(default=None, description="섭취 시각 (ISO 8601 형식)")
+
+
+class SaveDietPlanRequest(BaseModel):
+    """추천 식단 저장 요청 스키마"""
+    user_id: int = Field(description="사용자 ID")
+    diet_plan_name: str = Field(description="식단 이름 (예: '고단백 식단')")
+    description: Optional[str] = Field(default=None, description="식단 설명")
+    
+    # 메타데이터 (추천 당시 정보)
+    bmr: Optional[float] = Field(default=None, description="기초대사량 (kcal/day)")
+    tdee: Optional[float] = Field(default=None, description="1일 총 에너지 소비량 (kcal/day)")
+    target_calories: Optional[float] = Field(default=None, description="목표 칼로리 (kcal/day)")
+    health_goal: Optional[str] = Field(default=None, description="건강 목표 (gain/maintain/loss)")
+    
+    meals: list[SaveMealRequest] = Field(description="저장할 끼니 목록")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "user_id": 1,
+                "diet_plan_name": "고단백 식단",
+                "meals": [
+                    {
+                        "food_name": "고단백 식단 - 아침",
+                        "meal_type": "breakfast",
+                        "ingredients": ["현미밥 1공기", "닭가슴살 구이 100g", "시금치 무침"],
+                        "calories": 450.0,
+                        "protein": 35.0,
+                        "carb": 55.0,
+                        "fat": 8.0,
+                        "consumed_at": "2024-01-15T08:00:00"
+                    }
+                ]
+            }
+        }
+
+
+class SaveDietPlanResponse(BaseModel):
+    """추천 식단 저장 응답 스키마"""
+    success: bool = Field(description="저장 성공 여부")
+    message: str = Field(description="응답 메시지")
+    diet_plan_id: str = Field(description="저장된 식단 ID")
+    saved_count: int = Field(description="저장된 끼니 수")
 
