@@ -279,7 +279,9 @@ async def get_recipe_recommendations(
             allergies=allergies if allergies else None,
             user_nickname=user.nickname or user.username,
             has_eaten_today=has_eaten_today,
-            deficient_nutrients=deficient_nutrients if deficient_nutrients else None
+            deficient_nutrients=deficient_nutrients if deficient_nutrients else None,
+            meal_type=request.meal_type,  # ✨ 식사 유형 전달
+            excess_warnings=excess_warnings  # ✨ 초과 경고 전달
         )
         
         print(f"✅ 레시피 추천 완료: {len(result_data.get('recommendations', []))}개")
@@ -486,12 +488,14 @@ async def save_recipe_as_meal(
         # portion_size_g 계산 (인분 * 기본량 100g)
         portion_size_g = save_request.actual_servings * 100.0
         
+        print(f"📝 UserFoodHistory 저장 - meal_type={save_request.meal_type}")
         food_history = UserFoodHistory(
             user_id=user_id,
             food_id=food_id,
             food_name=save_request.recipe_name,
             consumed_at=datetime.now(),
-            portion_size_g=portion_size_g
+            portion_size_g=portion_size_g,
+            meal_type=save_request.meal_type  # ✨ meal_type 추가
         )
         session.add(food_history)
         await session.flush()

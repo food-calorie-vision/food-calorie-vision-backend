@@ -508,13 +508,34 @@ async def save_user_food(
             user_id=request.user_id,
             food_id=actual_food_id,  # 같은 food_id 사용
             food_name=request.food_name,
+            meal_type=request.meal_type,  # 식사 유형 추가
             consumed_at=datetime.now(),
             portion_size_g=request.portion_size_g,
         )
         
-        print(f"✅ 섭취 기록 저장 완료: history_id={history.history_id}")
+        print(f"✅ 섭취 기록 저장 완료: history_id={history.history_id}, meal_type={request.meal_type}")
         
-        # 3. 변경사항 커밋
+        # 5. NRF9.3 점수 계산 및 HealthScore 저장
+        if food_nutrient:
+            try:
+                nrf_score = calculate_nrf93_score(food_nutrient)
+                print(f"📊 NRF9.3 점수 계산: {nrf_score:.2f}")
+                
+                # HealthScore 저장
+                health_score = HealthScore(
+                    user_id=request.user_id,
+                    history_id=history.history_id,
+                    nrf_score=nrf_score,
+                    recorded_at=datetime.now()
+                )
+                session.add(health_score)
+                print(f"✅ HealthScore 저장 완료: nrf_score={nrf_score:.2f}")
+            except Exception as e:
+                print(f"⚠️ NRF 점수 계산 실패: {e}")
+        else:
+            print(f"⚠️ food_nutrient가 없어 NRF 점수를 계산하지 않음")
+        
+        # 6. 변경사항 커밋
         await session.commit()
         
         # 4. 응답 데이터 구성
@@ -522,6 +543,7 @@ async def save_user_food(
             history_id=history.history_id,
             food_id=food.food_id,
             food_name=history.food_name,
+            meal_type=history.meal_type,  # 식사 유형 추가
             consumed_at=history.consumed_at.isoformat() if history.consumed_at else datetime.now().isoformat(),
             portion_size_g=float(history.portion_size_g) if history.portion_size_g else None,
         )
