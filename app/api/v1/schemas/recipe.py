@@ -17,6 +17,7 @@ class RecipeRecommendationRequest(BaseModel):
     """레시피 추천 요청"""
     user_request: str = Field("", description="사용자 요청사항 (예: 매콤한 음식 먹고 싶어요)")
     conversation_history: Optional[List[dict]] = Field(None, description="대화 히스토리")
+    meal_type: Optional[str] = Field(None, description="식사 유형 (breakfast, lunch, dinner, snack)")
 
 
 class RecipeRecommendationResponse(BaseModel):

@@ -161,6 +161,64 @@ async def get_ingredients(
         raise HTTPException(status_code=500, detail=f"식재료 조회 중 오류가 발생했습니다: {str(e)}")
 
 
+@router.get("/my-ingredients", response_model=ApiResponse[List[IngredientResponse]])
+async def get_my_ingredients(
+    session: AsyncSession = Depends(get_session)
+) -> ApiResponse[List[IngredientResponse]]:
+    """
+    내 보유 식재료 목록 조회 (사용하지 않은 것만)
+    
+    현재 사용자가 저장한 식재료 중 아직 사용하지 않은 것들을 조회합니다.
+    프론트엔드에서 레시피 추천 시 보유 재료 확인용으로 사용됩니다.
+    
+    **Args:**
+        session: DB 세션
+        
+    **Returns:**
+        식재료 목록
+    """
+    try:
+        user_id = get_current_user_id()
+        
+        print(f"🔍 보유 식재료 조회 요청: user_id={user_id}")
+        
+        stmt = select(UserIngredient).where(
+            UserIngredient.user_id == user_id,
+            UserIngredient.is_used == False
+        ).order_by(UserIngredient.created_at.desc())
+        
+        result = await session.execute(stmt)
+        ingredients = result.scalars().all()
+        
+        print(f"📦 조회된 식재료: {len(ingredients)}개")
+        for ing in ingredients:
+            print(f"  - {ing.ingredient_name}: {ing.count}개 (is_used={ing.is_used})")
+        
+        ingredient_list = [
+            IngredientResponse(
+                ingredient_id=ing.ingredient_id,
+                user_id=ing.user_id,
+                ingredient_name=ing.ingredient_name,
+                count=ing.count,
+                created_at=ing.created_at,
+                is_used=ing.is_used
+            )
+            for ing in ingredients
+        ]
+        
+        return ApiResponse(
+            success=True,
+            data=ingredient_list,
+            message=f"✅ {len(ingredient_list)}개의 보유 식재료를 조회했습니다."
+        )
+        
+    except Exception as e:
+        print(f"❌ 보유 식재료 조회 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"보유 식재료 조회 중 오류가 발생했습니다: {str(e)}")
+
+
 @router.get("/recommendations", response_model=ApiResponse[RecommendationData])
 async def get_food_recommendations(
     session: AsyncSession = Depends(get_session)
@@ -208,16 +266,48 @@ async def get_food_recommendations(
         ingredient_result = await session.execute(ingredient_stmt)
         ingredients = ingredient_result.scalars().all()
         
-        if not ingredients:
-            return ApiResponse(
-                success=False,
-                data=None,
-                message="⚠️ 저장된 식재료가 없습니다. 먼저 식재료를 추가해주세요."
-            )
-        
         # 식재료 목록 문자열 생성
-        ingredient_names = [f"{ing.ingredient_name} ({ing.count}개)" for ing in ingredients]
-        ingredient_text = ", ".join(ingredient_names)
+        if ingredients:
+            ingredient_names = [f"{ing.ingredient_name} ({ing.count}개)" for ing in ingredients]
+            ingredient_text = ", ".join(ingredient_names)
+            
+            # 재료가 3개 미만이면 안내 메시지 추가
+            if len(ingredients) < 3:
+                ingredient_note = "\n\n⚠️ **참고**: 식재료가 다소 부족하여 추천이 제한적일 수 있습니다. 더 다양한 레시피를 원하시면 식재료를 추가로 등록해주세요!"
+            else:
+                ingredient_note = ""
+        else:
+            # 식재료가 없을 때는 기본 샐러드 레시피 제공
+            default_salad_recipe = {
+                "foods": [
+                    {
+                        "name": "기본 그린 샐러드",
+                        "description": "신선한 채소로 만드는 건강한 샐러드입니다. 식재료를 더 추가하시면 다양한 레시피를 추천해드릴게요!",
+                        "calories": 150,
+                        "recommended_meal_type": "lunch",
+                        "ingredients": ["양상추", "방울토마토", "오이", "올리브오일", "레몬즙"],
+                        "steps": [
+                            "양상추를 깨끗이 씻어 물기를 제거합니다",
+                            "방울토마토는 반으로 자르고, 오이는 얇게 슬라이스합니다",
+                            "그릇에 채소를 담고 올리브오일과 레몬즙을 뿌립니다",
+                            "가볍게 섞어서 완성!"
+                        ]
+                    }
+                ]
+            }
+            
+            import json
+            recommendation_text = json.dumps(default_salad_recipe, ensure_ascii=False)
+            
+            return ApiResponse(
+                success=True,
+                data=RecommendationData(
+                    recommendations=recommendation_text,
+                    ingredients_used=[],
+                    total_ingredients=0
+                ),
+                message="✅ 저장된 식재료가 없어 기본 샐러드 레시피를 알려드려요! 식재료를 추가하시면 더 다양한 레시피를 추천해드릴게요 🥗"
+            )
         
         # 건강 목표 한글 변환
         health_goal_text = {
@@ -250,19 +340,29 @@ async def get_food_recommendations(
             if diseases:
                 health_info += f"\n- ⚠️ 질병: {', '.join(diseases)}"
             
+            # 재료 부족 안내 추가
+            ingredient_shortage_note = ""
+            if len(ingredients) < 3:
+                ingredient_shortage_note = f"\n\n⚠️ **현재 보유 식재료가 {len(ingredients)}개로 적은 편입니다.** 가능한 보유 재료를 최대한 활용하되, 추가로 필요한 재료가 있어도 괜찮습니다."
+            
             prompt = f"""당신은 전문 영양사이자 요리사입니다. 
 
 {health_info}
 
 보유 식재료:
-{ingredient_text}
+{ingredient_text}{ingredient_note}{ingredient_shortage_note}
 
 **중요한 제약사항:**
-{f"1. 알러지 주의: {', '.join(allergies)} - 이 재료들은 절대 사용하지 마세요!" if allergies else ""}
-{f"2. 질병 고려: {', '.join(diseases)} - 이 질병에 좋은 음식을 추천해주세요." if diseases else ""}
-3. 건강 목표: {health_goal_text}에 적합한 음식을 추천해주세요.
+{f"1. ⚠️ 알러지 주의: {', '.join(allergies)} - 이 재료들은 절대 사용하지 마세요!" if allergies else ""}
+{f"2. 🏥 질병 고려: {', '.join(diseases)} - 이 질병에 도움이 되는 음식을 추천해주세요." if diseases else ""}
+3. 🎯 건강 목표: {health_goal_text}에 적합한 음식을 추천해주세요.
+4. 📦 재료 활용: 보유 식재료를 최대한 활용하되, 필요시 추가 재료 사용 가능 (기본 양념은 자유롭게 사용)
 
-위 식재료와 건강 정보를 고려하여 3-5가지 맞춤형 음식을 추천해주세요.
+**추천 전략:**
+- 보유 식재료를 1개 이상 반드시 포함
+- 보유 식재료가 적으면 적은 재료로 만들 수 있는 간단한 레시피 우선 추천
+- 건강 목표와 질병/알러지를 고려한 맞춤형 추천
+- 3-5가지 다양한 음식 추천 (아침/점심/저녁/간식 골고루)
 
 **응답 형식:** 반드시 다음 JSON 형식으로만 응답하세요:
 
@@ -271,7 +371,9 @@ async def get_food_recommendations(
     {{
       "name": "음식 이름",
       "description": "간단한 설명 (건강상 이점 포함)",
-      "ingredients": ["재료1", "재료2", "재료3"],
+      "calories": 450,
+      "recommended_meal_type": "lunch",
+      "ingredients": ["보유재료1", "보유재료2", "추가재료1", "기본양념"],
       "steps": [
         "조리 단계 1",
         "조리 단계 2",
@@ -284,8 +386,11 @@ async def get_food_recommendations(
 
 주의사항:
 - 각 음식은 3-6개의 조리 단계로 구성하세요
-- 설명은 한 문장으로 간결하게
-- 보유 재료 위주로 활용하되, 필요시 기본 양념(소금, 간장 등)은 추가 가능
+- 설명은 한 문장으로 간결하게 (건강상 이점 반드시 포함)
+- calories는 1인분 기준 예상 칼로리(kcal)를 정수로 표기하세요
+- recommended_meal_type은 breakfast(아침), lunch(점심), dinner(저녁), snack(간식) 중 하나를 선택하세요
+- ingredients 배열에는 보유 재료를 앞에 배치하고, 필요한 추가 재료를 뒤에 배치하세요
+- 알러지 재료는 절대 포함하지 마세요!
 """
 
             response = client.chat.completions.create(
@@ -316,6 +421,8 @@ async def get_food_recommendations(
                 fallback_foods.append({
                     "name": "양배추 볶음",
                     "description": "간단하고 건강한 채소 요리",
+                    "calories": 150,
+                    "recommended_meal_type": "lunch",
                     "ingredients": ["양배추", "마늘", "소금", "참기름"],
                     "steps": [
                         "양배추를 먹기 좋은 크기로 썰어주세요",
@@ -329,6 +436,8 @@ async def get_food_recommendations(
                 fallback_foods.append({
                     "name": "닭가슴살 구이",
                     "description": "단백질이 풍부한 건강 요리",
+                    "calories": 250,
+                    "recommended_meal_type": "dinner",
                     "ingredients": ["닭가슴살", "소금", "후추", "올리브유"],
                     "steps": [
                         "닭가슴살에 소금, 후추로 밑간해주세요",
@@ -338,31 +447,35 @@ async def get_food_recommendations(
                     ]
                 })
             
-            if any('채소' in ing or '브로콜리' in ing or '당근' in ing for ing in ingredients_list):
+            if any('브로콜리' in ing for ing in ingredients_list):
                 fallback_foods.append({
-                    "name": "채소 볶음",
-                    "description": "다양한 영양소가 가득한 건강식",
-                    "ingredients": ["각종 채소", "마늘", "간장", "참기름"],
+                    "name": "브로콜리 마늘볶음",
+                    "description": "비타민이 풍부한 건강 채소 요리",
+                    "calories": 120,
+                    "recommended_meal_type": "lunch",
+                    "ingredients": ["브로콜리", "마늘", "올리브오일", "소금"],
                     "steps": [
-                        "채소를 먹기 좋은 크기로 썰어주세요",
-                        "팬에 마늘을 볶다가 채소를 넣어주세요",
-                        "간장으로 간하며 볶아주세요",
-                        "참기름을 넣어 완성!"
+                        "브로콜리를 먹기 좋은 크기로 자릅니다",
+                        "끓는 물에 브로콜리를 1분간 데쳐냅니다",
+                        "팬에 올리브오일과 마늘을 볶다가 브로콜리를 넣습니다",
+                        "소금으로 간하며 볶아 완성!"
                     ]
                 })
             
-            # 기본 추천이 없으면 범용 레시피 제공
+            # 기본 추천이 없으면 기본 샐러드 제공
             if not fallback_foods:
                 fallback_foods = [
                     {
-                        "name": "간단한 볶음 요리",
-                        "description": "보유 재료로 만드는 건강한 한 끼",
-                        "ingredients": ingredients_list[:4] if len(ingredients_list) > 0 else ["준비된 재료"],
+                        "name": "기본 그린 샐러드",
+                        "description": "신선한 채소로 만드는 건강한 샐러드입니다. 보유하신 재료를 활용해보세요!",
+                        "calories": 150,
+                        "recommended_meal_type": "lunch",
+                        "ingredients": ingredients_list[:4] + ["올리브오일", "레몬즙", "소금"] if len(ingredients_list) > 0 else ["양상추", "방울토마토", "오이", "올리브오일", "레몬즙"],
                         "steps": [
-                            "재료를 깨끗이 씻어주세요",
-                            "먹기 좋은 크기로 손질해주세요",
-                            "팬에 기름을 두르고 볶아주세요",
-                            "간을 맞추고 완성!"
+                            "재료를 깨끗이 씻어 물기를 제거합니다",
+                            "채소는 먹기 좋은 크기로 자릅니다",
+                            "볼에 채소를 담고 올리브오일과 레몬즙을 뿌립니다",
+                            "소금으로 간하고 가볍게 섞어 완성!"
                         ]
                     }
                 ]
@@ -373,6 +486,18 @@ async def get_food_recommendations(
                 "foods": fallback_foods
             }, ensure_ascii=False)
         
+        # 메시지 생성 (재료 수에 따라)
+        if len(ingredients) == 0:
+            response_message = "✅ 저장된 식재료가 없어 기본 샐러드 레시피를 알려드려요! 식재료를 추가하시면 더 다양한 레시피를 추천해드릴게요 🥗"
+        elif len(ingredients) == 1:
+            response_message = f"✅ 음식 추천 완료! 현재 식재료가 1개로 적어서 간단한 레시피 위주로 추천해드렸어요. 식재료를 추가하시면 더 다양하고 맛있는 레시피를 만나보실 수 있어요! 🌱"
+        elif len(ingredients) == 2:
+            response_message = f"✅ 음식 추천 완료! 현재 식재료가 2개예요. 보유하신 재료를 최대한 활용한 레시피를 준비했습니다. 더 풍성한 레시피를 원하시면 식재료를 추가해주세요! 🥗"
+        elif len(ingredients) < 5:
+            response_message = f"✅ 맞춤형 음식 추천 완료! 보유 식재료 {len(ingredients)}개를 활용한 건강한 레시피를 준비했어요 🍳"
+        else:
+            response_message = f"✅ 풍성한 맞춤형 음식 추천 완료! 보유 식재료 {len(ingredients)}개로 다양한 레시피를 즐겨보세요 🎉"
+        
         return ApiResponse(
             success=True,
             data=RecommendationData(
@@ -380,7 +505,7 @@ async def get_food_recommendations(
                 ingredients_used=[ing.ingredient_name for ing in ingredients],
                 total_ingredients=len(ingredients)
             ),
-            message="✅ 맞춤형 음식 추천이 생성되었습니다!"
+            message=response_message
         )
         
     except Exception as e:

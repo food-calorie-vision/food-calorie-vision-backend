@@ -48,7 +48,7 @@ class Food(Base):
 
 
 class UserFoodHistory(Base):
-    """UserFoodHistory 테이블 - ERDCloud 원본"""
+    """UserFoodHistory 테이블 - ERDCloud 원본 + meal_type 추가"""
 
     __tablename__ = "UserFoodHistory"
 
@@ -58,9 +58,10 @@ class UserFoodHistory(Base):
     consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, server_default=func.current_timestamp())
     portion_size_g: Mapped[Optional[float]] = mapped_column(DECIMAL(10, 2), nullable=True)
     food_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    meal_type: Mapped[str] = mapped_column(Enum('breakfast', 'lunch', 'dinner', 'snack', name='meal_type_enum'), nullable=False, server_default='lunch', comment='식사 유형 (아침/점심/저녁/간식)')
 
     def __repr__(self) -> str:
-        return f"<UserFoodHistory(history_id={self.history_id}, user_id={self.user_id}, food_name={self.food_name})>"
+        return f"<UserFoodHistory(history_id={self.history_id}, user_id={self.user_id}, food_name={self.food_name}, meal_type={self.meal_type})>"
 
 
 class HealthScore(Base):

@@ -13,6 +13,7 @@ async def create_food_history(
     user_id: int,
     food_id: str,
     food_name: str,
+    meal_type: str = "lunch",
     consumed_at: Optional[datetime] = None,
     portion_size_g: Optional[float] = None,
 ) -> UserFoodHistory:
@@ -24,6 +25,7 @@ async def create_food_history(
         user_id: 사용자 ID (BIGINT)
         food_id: 음식 ID (VARCHAR(200))
         food_name: 음식 이름
+        meal_type: 식사 유형 (breakfast/lunch/dinner/snack, 기본값: lunch)
         consumed_at: 섭취 시간 (기본값: 현재 시간)
         portion_size_g: 섭취량 (g)
     
@@ -34,6 +36,7 @@ async def create_food_history(
         user_id=user_id,
         food_id=food_id,
         food_name=food_name,
+        meal_type=meal_type,
         consumed_at=consumed_at or datetime.now(),
         portion_size_g=portion_size_g,
     )
@@ -136,6 +139,7 @@ async def update_food_history(
     history_id: int,
     portion_size_g: Optional[float] = None,
     consumed_at: Optional[datetime] = None,
+    meal_type: Optional[str] = None,
 ) -> Optional[UserFoodHistory]:
     """
     음식 섭취 기록 수정
@@ -145,6 +149,7 @@ async def update_food_history(
         history_id: 기록 ID
         portion_size_g: 수정할 섭취량
         consumed_at: 수정할 섭취 시간
+        meal_type: 수정할 식사 유형
     
     Returns:
         수정된 UserFoodHistory 객체 또는 None
@@ -157,6 +162,8 @@ async def update_food_history(
         history.portion_size_g = portion_size_g
     if consumed_at is not None:
         history.consumed_at = consumed_at
+    if meal_type is not None:
+        history.meal_type = meal_type
     
     await session.flush()
     return history
@@ -248,6 +255,7 @@ async def get_user_food_history_with_details(
             UserFoodHistory.user_id,
             UserFoodHistory.food_id,
             UserFoodHistory.food_name,
+            UserFoodHistory.meal_type,
             UserFoodHistory.consumed_at,
             UserFoodHistory.portion_size_g,
             Food.food_class_1,
@@ -282,6 +290,7 @@ async def get_user_food_history_with_details(
             "user_id": row.user_id,
             "food_id": row.food_id,
             "food_name": row.food_name,
+            "meal_type": row.meal_type,
             "consumed_at": row.consumed_at,
             "portion_size_g": row.portion_size_g,
             "food_class_1": row.food_class_1,

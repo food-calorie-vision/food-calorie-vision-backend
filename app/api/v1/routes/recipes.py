@@ -246,30 +246,14 @@ async def get_recipe_recommendations(
         # 사용자가 실제로 음식 요청을 한 경우 (키워드가 있거나, 충분히 긴 텍스트인 경우)
         is_actual_food_request = has_food_request and (has_food_keyword or len(user_request_clean) > 5)
         
-        # 칼로리나 나트륨 초과 시 alert 메시지 표시
-        # 단, 사용자가 실제로 음식 요청을 한 경우는 alert를 건너뛰고 레시피 추천 진행
-        if has_eaten_today and (calories_exceeded or sodium_exceeded) and not is_actual_food_request:
-            warning_messages = []
-            if calories_exceeded:
-                warning_messages.append(f"오늘 이미 목표 칼로리({target_calories}kcal) 이상을 섭취하셨습니다.")
-            if sodium_exceeded:
-                warning_messages.append(f"오늘 이미 권장 나트륨량({daily_values['sodium']:.0f}mg) 이상을 섭취하셨습니다.")
-            
-            warning_text = " ".join(warning_messages)
-            alert_message = f"{user.nickname or '고객'}님, {warning_text}\n\n더 드시면 건강에 좋지 않을 수 있으니, 자제하는 편이 훨씬 좋을 것 같아요! 😊\n\n하지만 원하시는 음식이 있다면 말씀해주세요. 레시피를 추천해드릴게요!"
-            
-            return ApiResponse(
-                success=True,
-                data=RecipeRecommendationResponse(
-                    inferred_preference="오늘 충분히 섭취하여 추가 섭취 자제 권장",
-                    health_warning=None,
-                    user_friendly_message=alert_message,
-                    recommendations=[]  # 레시피 추천 없음 - 사용자가 다시 요청하면 그때 추천
-                ),
-                message="✅ 건강을 위한 자제 권장 메시지"
-            )
+        # 칼로리나 나트륨 초과 시 경고 메시지 준비 (추천은 계속 진행)
+        excess_warnings = []
+        if has_eaten_today and calories_exceeded:
+            excess_warnings.append(f"⚠️ 칼로리: 오늘 이미 목표 칼로리({target_calories}kcal)를 초과하셨습니다.")
+        if has_eaten_today and sodium_exceeded:
+            excess_warnings.append(f"⚠️ 나트륨: 오늘 이미 권장 나트륨량({daily_values['sodium']:.0f}mg)을 초과하셨습니다.")
         
-        # 5. 레시피 추천 서비스 호출 (칼로리/나트륨 초과가 아닌 경우에만)
+        # 5. 레시피 추천 서비스 호출 (항상 추천하되, 경고 메시지 포함)
         recipe_service = get_recipe_recommendation_service()
         result_data = await recipe_service.get_recipe_recommendations(
             user=user,
@@ -279,7 +263,9 @@ async def get_recipe_recommendations(
             allergies=allergies if allergies else None,
             user_nickname=user.nickname or user.username,
             has_eaten_today=has_eaten_today,
-            deficient_nutrients=deficient_nutrients if deficient_nutrients else None
+            deficient_nutrients=deficient_nutrients if deficient_nutrients else None,
+            meal_type=request.meal_type,  # ✨ 식사 유형 전달
+            excess_warnings=excess_warnings  # ✨ 초과 경고 전달
         )
         
         print(f"✅ 레시피 추천 완료: {len(result_data.get('recommendations', []))}개")
@@ -486,12 +472,14 @@ async def save_recipe_as_meal(
         # portion_size_g 계산 (인분 * 기본량 100g)
         portion_size_g = save_request.actual_servings * 100.0
         
+        print(f"📝 UserFoodHistory 저장 - meal_type={save_request.meal_type}")
         food_history = UserFoodHistory(
             user_id=user_id,
             food_id=food_id,
             food_name=save_request.recipe_name,
             consumed_at=datetime.now(),
-            portion_size_g=portion_size_g
+            portion_size_g=portion_size_g,
+            meal_type=save_request.meal_type  # ✨ meal_type 추가
         )
         session.add(food_history)
         await session.flush()
