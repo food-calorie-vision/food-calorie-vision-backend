@@ -639,12 +639,14 @@ async def save_recommended_meal(
         column_info = await columns.run_sync(get_table_columns)
         print(f"🔍 DB 실제 컬럼 목록: {[col['name'] for col in column_info]}")
         
+        print(f"📝 STEP 5: UserFoodHistory 저장 - meal_type={request.meal_type}")
         history = UserFoodHistory(
             user_id=user_id,
             food_id=food_id,
             food_name=request.food_name,
             consumed_at=datetime.now(),
-            portion_size_g=request.portion_size_g
+            portion_size_g=request.portion_size_g,
+            meal_type=request.meal_type  # ✨ meal_type 추가
             # memo=request.memo  # 임시로 제거 (DB에 memo 컬럼 없음)
         )
         session.add(history)

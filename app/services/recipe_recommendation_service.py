@@ -27,7 +27,8 @@ class RecipeRecommendationService:
         user_nickname: str = "",
         has_eaten_today: bool = True,
         deficient_nutrients: List[Dict[str, any]] = None,
-        excess_warnings: List[str] = None
+        excess_warnings: List[str] = None,
+        meal_type: str = None
     ) -> dict:
         """
         사용자 정보를 기반으로 GPT가 레시피 3개를 추천
@@ -73,6 +74,22 @@ class RecipeRecommendationService:
             today_status_text += "\n\n**중요:** 사용자가 요청한 재료에 추가로 부족한 영양소를 보완할 수 있는 재료를 포함한 레시피를 추천해주세요."
             today_status_text += "\n예: 단백질이 부족하면 닭가슴살, 계란, 두부 등을 추가하고, 식이섬유가 부족하면 채소, 과일, 견과류 등을 추가하세요."
         
+        # 초과 경고 정보 구성
+        excess_warnings_text = ""
+        if excess_warnings:
+            excess_warnings_text = "\n\n**⚠️ 건강 알림:**\n" + "\n".join([f"- {w}" for w in excess_warnings])
+            excess_warnings_text += "\n\n**중요:** 위 경고를 사용자에게 알리되, 레시피는 반드시 추천해주세요. 다만 칼로리와 나트륨이 낮은 건강한 레시피를 우선 추천해주세요."
+        
+        # 식사 유형에 따른 설명
+        meal_type_kr = {
+            "breakfast": "아침",
+            "lunch": "점심",
+            "dinner": "저녁",
+            "snack": "간식"
+        }.get(meal_type, "")
+        
+        meal_type_text = f"\n- **식사 유형:** {meal_type_kr} (이 시간대에 적합한 레시피를 추천하세요)" if meal_type else ""
+        
         # GPT 프롬프트 생성
         prompt = f"""당신은 영양사이자 요리 전문가입니다. 사용자의 건강 정보와 선호도를 기반으로 레시피를 추천해주세요.
 
@@ -81,7 +98,7 @@ class RecipeRecommendationService:
 - 나이: {user.age or 30}세
 - 체중: {float(user.weight or 70.0)}kg
 - 건강 목표: {health_goal_kr}
-- 건강 상태:{health_info_text}{today_status_text}
+- 건강 상태:{health_info_text}{today_status_text}{excess_warnings_text}{meal_type_text}
 
 **사용자 요청:**
 {user_request if user_request else "특별한 요청 없음"}
@@ -150,7 +167,8 @@ JSON 형식만 반환하세요. 다른 텍스트는 포함하지 마세요."""
                 diseases=diseases,
                 user_nickname=user_nickname,
                 has_eaten_today=has_eaten_today,
-                deficient_nutrients=deficient_nutrients
+                deficient_nutrients=deficient_nutrients,
+                excess_warnings=excess_warnings  # ✨ 초과 경고 전달
             )
             
             result["user_friendly_message"] = user_friendly_message
@@ -192,7 +210,8 @@ JSON 형식만 반환하세요. 다른 텍스트는 포함하지 마세요."""
                 inferred_preference=default_result["inferred_preference"],
                 health_warning=None,
                 diseases=diseases,
-                user_nickname=user_nickname
+                user_nickname=user_nickname,
+                excess_warnings=excess_warnings  # ✨ 초과 경고 전달
             )
             return default_result
     
@@ -204,7 +223,8 @@ JSON 형식만 반환하세요. 다른 텍스트는 포함하지 마세요."""
         diseases: List[str] = None,
         user_nickname: str = "",
         has_eaten_today: bool = True,
-        deficient_nutrients: List[Dict[str, any]] = None
+        deficient_nutrients: List[Dict[str, any]] = None,
+        excess_warnings: List[str] = None
     ) -> str:
         """
         사용자에게 보여줄 친화적 메시지 생성
@@ -240,14 +260,17 @@ JSON 형식만 반환하세요. 다른 텍스트는 포함하지 마세요."""
                 clean_request = user_request.strip()
                 message_parts.append(f"{name_prefix}{clean_request}")
         
-        # 2. 부족한 영양소 안내
+        # 2. 초과 경고 안내 (칼로리/나트륨)
+        # → 제거됨: 이미 별도의 빨간색 경고 메시지로 표시되므로 여기서는 언급하지 않음
+        
+        # 3. 부족한 영양소 안내
         if deficient_nutrients and len(deficient_nutrients) > 0:
             nutrient_names = [n['name'] for n in deficient_nutrients]
             nutrient_text = ", ".join(nutrient_names)
             message_parts.append(f"\n오늘 섭취한 영양소를 확인해보니 {nutrient_text}이(가) 부족하시네요!")
             message_parts.append("요청하신 재료에 추가로 부족한 영양소를 보완할 수 있는 재료가 들어간 레시피를 추천해드릴게요! 💚")
         
-        # 3. 건강 상태 고려 안내 (질병이 있는 경우)
+        # 4. 건강 상태 고려 안내 (질병이 있는 경우)
         if diseases and health_warning:
             disease_text = ", ".join(diseases)
             if name_prefix:
@@ -260,7 +283,7 @@ JSON 형식만 반환하세요. 다른 텍스트는 포함하지 마세요."""
         elif health_warning:
             message_parts.append(f"\n{health_warning}")
         
-        # 4. 마무리 메시지
+        # 5. 마무리 메시지
         if not has_eaten_today or deficient_nutrients or health_warning or diseases:
             message_parts.append("\n건강을 고려한 레시피를 추천해드릴게요! 아래에서 원하시는 레시피를 선택해주세요 🍳")
         else:

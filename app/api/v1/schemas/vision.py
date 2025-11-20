@@ -78,6 +78,7 @@ class SaveFoodRequest(BaseModel):
 
     user_id: int = Field(alias="userId")
     food_name: str = Field(alias="foodName")
+    meal_type: str = Field(default="lunch", alias="mealType", description="식사 유형 (breakfast/lunch/dinner/snack)")
     food_class_1: str | None = Field(None, alias="foodClass1")  # 대분류
     food_class_2: str | None = Field(None, alias="foodClass2")  # 중분류
     ingredients: list[str] = []  # 재료 리스트
@@ -94,5 +95,6 @@ class SaveFoodResponse(BaseModel):
     history_id: int = Field(alias="historyId")
     food_id: str = Field(alias="foodId")
     food_name: str = Field(alias="foodName")
+    meal_type: str = Field(alias="mealType", description="식사 유형 (breakfast/lunch/dinner/snack)")
     consumed_at: str = Field(alias="consumedAt")
     portion_size_g: float | None = Field(None, alias="portionSizeG")
