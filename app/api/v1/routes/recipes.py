@@ -206,12 +206,20 @@ async def get_recipe_recommendations(
         calories_exceeded = total_calories >= target_calories * 1.1  # 목표 칼로리의 110% 이상
         sodium_exceeded = total_nutrients['sodium'] >= daily_values['sodium'] * 1.2  # 권장량의 120% 이상
         
+        # 초과 경고 메시지 생성
+        excess_warnings = []
+        if calories_exceeded:
+            excess_warnings.append(f"오늘 이미 목표 칼로리({target_calories:.0f}kcal)의 110% 이상을 섭취하셨습니다.")
+        if sodium_exceeded:
+            excess_warnings.append(f"오늘 이미 권장 나트륨량({daily_values['sodium']:.0f}mg)의 120% 이상을 섭취하셨습니다.")
+        
         print(f"📊 오늘 섭취 영양소 분석:")
         print(f"  - 섭취한 음식 수: {len(nutrients_data)}개")
         print(f"  - 총 칼로리: {total_calories:.0f}kcal (목표: {target_calories}kcal)")
         print(f"  - 총 나트륨: {total_nutrients['sodium']:.0f}mg (권장: {daily_values['sodium']:.0f}mg)")
         print(f"  - 부족한 영양소: {[n['name'] for n in deficient_nutrients]}")
         print(f"  - 칼로리 초과: {calories_exceeded}, 나트륨 초과: {sodium_exceeded}")
+        print(f"  - 초과 경고: {excess_warnings}")
         
         # 음식 관련이 아닌 요청인지 확인
         user_request_lower = (request.user_request or "").lower()
