@@ -14,6 +14,7 @@ from app.api.v1.schemas.ingredient import (
     IngredientResponse,
     RecommendationData,
 )
+from app.api.dependencies import require_authentication
 from app.db.models import UserIngredient, User, DiseaseAllergyProfile
 from app.db.session import get_session
 from app.services.roboflow_service import get_roboflow_service
@@ -22,19 +23,11 @@ from app.services.gpt_vision_service import get_gpt_vision_service
 router = APIRouter()
 
 
-def get_current_user_id() -> int:
-    """
-    현재 로그인된 사용자 ID를 반환
-    TODO: 실제로는 세션이나 JWT에서 가져와야 함
-    """
-    # 임시로 테스트 사용자 ID 반환
-    return 1
-
-
 @router.post("/save", response_model=ApiResponse[SaveIngredientsData])
 async def save_ingredients(
     request: SaveIngredientsRequest,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    user_id: int = Depends(require_authentication)
 ) -> ApiResponse[SaveIngredientsData]:
     """
     식재료 저장
@@ -50,7 +43,6 @@ async def save_ingredients(
         저장된 식재료 정보
     """
     try:
-        user_id = get_current_user_id()
         saved_ingredients = []
         
         for item in request.ingredients:
@@ -112,7 +104,8 @@ async def save_ingredients(
 
 @router.get("/list", response_model=ApiResponse[List[IngredientResponse]])
 async def get_ingredients(
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    user_id: int = Depends(require_authentication)
 ) -> ApiResponse[List[IngredientResponse]]:
     """
     저장된 식재료 목록 조회
@@ -126,8 +119,6 @@ async def get_ingredients(
         식재료 목록
     """
     try:
-        user_id = get_current_user_id()
-        
         stmt = select(UserIngredient).where(
             UserIngredient.user_id == user_id,
             UserIngredient.is_used == False
@@ -163,7 +154,8 @@ async def get_ingredients(
 
 @router.get("/my-ingredients", response_model=ApiResponse[List[IngredientResponse]])
 async def get_my_ingredients(
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    user_id: int = Depends(require_authentication)
 ) -> ApiResponse[List[IngredientResponse]]:
     """
     내 보유 식재료 목록 조회 (사용하지 않은 것만)
@@ -178,8 +170,6 @@ async def get_my_ingredients(
         식재료 목록
     """
     try:
-        user_id = get_current_user_id()
-        
         print(f"🔍 보유 식재료 조회 요청: user_id={user_id}")
         
         stmt = select(UserIngredient).where(
@@ -221,7 +211,8 @@ async def get_my_ingredients(
 
 @router.get("/recommendations", response_model=ApiResponse[RecommendationData])
 async def get_food_recommendations(
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    user_id: int = Depends(require_authentication)
 ) -> ApiResponse[RecommendationData]:
     """
     누적된 식재료 기반 음식 추천
@@ -236,8 +227,6 @@ async def get_food_recommendations(
         LLM이 생성한 음식 추천
     """
     try:
-        user_id = get_current_user_id()
-        
         # 1. 사용자 정보 조회 (건강 목표 등)
         user_stmt = select(User).where(User.user_id == user_id)
         user_result = await session.execute(user_stmt)
@@ -614,4 +603,3 @@ async def analyze_ingredients_with_roboflow_gpt(
     except Exception as e:
         print(f"❌ 식재료 분석 실패: {e}")
         raise HTTPException(status_code=500, detail=f"식재료 분석 중 오류가 발생했습니다: {str(e)}")
-
