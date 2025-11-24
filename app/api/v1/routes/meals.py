@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field
 
 from app.api.v1.schemas.common import ApiResponse
+from app.api.dependencies import require_authentication
 from app.db.models import UserFoodHistory, HealthScore, User, Food, UserIngredient
 from app.db.models_food_nutrients import FoodNutrient
 from app.db.models_user_contributed import UserContributedFood
@@ -21,11 +22,6 @@ from app.services.health_score_service import (
 )
 
 router = APIRouter()
-
-
-def get_current_user_id() -> int:
-    """현재 로그인된 사용자 ID 반환 (임시)"""
-    return 1
 
 
 # ========== Request/Response 스키마 ==========
@@ -116,7 +112,8 @@ class ScoreDetailResponse(BaseModel):
 @router.post("/save", response_model=ApiResponse[List[MealRecordResponse]])
 async def save_meal_records(
     request: SaveMealRequest,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    user_id: int = Depends(require_authentication)
 ) -> ApiResponse[List[MealRecordResponse]]:
     """
     음식 기록 저장 + 건강 점수 자동 계산
@@ -133,7 +130,6 @@ async def save_meal_records(
         저장된 음식 기록 + 건강 점수
     """
     try:
-        user_id = get_current_user_id()
         saved_records = []
         
         for food_item in request.foods:
@@ -221,7 +217,8 @@ async def save_meal_records(
 
 @router.get("/dashboard-stats", response_model=ApiResponse[DashboardStatsResponse])
 async def get_dashboard_stats(
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    user_id: int = Depends(require_authentication)
 ) -> ApiResponse[DashboardStatsResponse]:
     """
     대시보드 통계 조회
@@ -239,7 +236,6 @@ async def get_dashboard_stats(
         대시보드 통계 데이터
     """
     try:
-        user_id = get_current_user_id()
         today = datetime.now().date()
         
         # 1. 오늘 총 칼로리
@@ -367,7 +363,8 @@ async def get_dashboard_stats(
 async def get_meal_history(
     limit: int = 20,
     offset: int = 0,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    user_id: int = Depends(require_authentication)
 ) -> ApiResponse[List[MealRecordResponse]]:
     """
     음식 섭취 기록 조회
@@ -381,8 +378,6 @@ async def get_meal_history(
         음식 기록 목록
     """
     try:
-        user_id = get_current_user_id()
-        
         # UserFoodHistory + HealthScore 조인 조회
         stmt = select(UserFoodHistory, HealthScore).where(
             UserFoodHistory.user_id == user_id
@@ -430,7 +425,8 @@ async def get_meal_history(
 @router.post("/save-recommended", response_model=ApiResponse[MealRecordResponse])
 async def save_recommended_meal(
     request: SaveRecommendedMealRequest,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    user_id: int = Depends(require_authentication)
 ) -> ApiResponse[MealRecordResponse]:
     """
     추천 음식 선택 및 저장
@@ -451,8 +447,6 @@ async def save_recommended_meal(
         저장된 음식 기록 + NRF9.3 점수
     """
     try:
-        user_id = get_current_user_id()
-        
         # ========== STEP 1: 식재료 사용 처리 ==========
         # ingredients_with_quantity 우선, 없으면 레거시 방식
         if request.ingredients_with_quantity:
@@ -772,7 +766,8 @@ async def save_recommended_meal(
 
 @router.get("/score-detail", response_model=ApiResponse[ScoreDetailResponse])
 async def get_score_detail(
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    user_id: int = Depends(require_authentication)
 ) -> ApiResponse[ScoreDetailResponse]:
     """
     상세 점수 현황 조회
@@ -789,7 +784,6 @@ async def get_score_detail(
         상세 점수 현황 데이터
     """
     try:
-        user_id = get_current_user_id()
         today = datetime.now().date()
         yesterday = today - timedelta(days=1)
         
@@ -1067,7 +1061,8 @@ async def get_score_detail(
 @router.delete("/history/{history_id}", response_model=ApiResponse[dict])
 async def delete_meal_history(
     history_id: int,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    user_id: int = Depends(require_authentication)
 ) -> ApiResponse[dict]:
     """
     음식 섭취 기록 삭제
@@ -1080,8 +1075,6 @@ async def delete_meal_history(
         삭제 결과
     """
     try:
-        user_id = get_current_user_id()
-        
         # 기록 존재 여부 및 권한 확인
         stmt = select(UserFoodHistory).where(
             and_(
@@ -1129,4 +1122,3 @@ async def delete_meal_history(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"기록 삭제 중 오류 발생: {str(e)}")
-
