@@ -102,12 +102,58 @@ def login_user(request: Request, user_id: int, **kwargs: Any) -> None:
         user_id: 사용자 ID (users.user_id - BIGINT)
         **kwargs: 추가 사용자 정보
     """
+    import time
     request.session["user_id"] = user_id
     request.session["authenticated"] = True
+    request.session["login_time"] = time.time()  # 로그인 시간 저장
+    request.session["last_activity"] = time.time()  # 마지막 활동 시간
     
     # 추가 정보 저장
     for key, value in kwargs.items():
         request.session[key] = value
+
+
+def get_session_remaining_time(request: Request) -> int | None:
+    """
+    세션 남은 시간 계산 (초)
+    
+    Args:
+        request: FastAPI Request 객체
+        
+    Returns:
+        남은 시간 (초) 또는 None
+    """
+    import time
+    from app.core.config import get_settings
+    
+    last_activity = get_session_value(request, "last_activity")
+    if last_activity is None:
+        return None
+    
+    settings = get_settings()
+    elapsed = time.time() - last_activity
+    remaining = settings.session_max_age - int(elapsed)
+    
+    return max(0, remaining)
+
+
+def update_session_activity(request: Request) -> None:
+    """
+    세션 활동 시간 갱신 (refresh-session 호출 시에만 사용)
+    
+    Args:
+        request: FastAPI Request 객체
+    """
+    import time
+    new_time = time.time()
+    old_time = request.session.get("last_activity")
+    request.session["last_activity"] = new_time
+    
+    # 디버그: 세션 업데이트 확인
+    print(f"🔧 세션 활동 시간 업데이트:")
+    print(f"   이전: {old_time} ({time.ctime(old_time) if old_time else 'None'})")
+    print(f"   현재: {new_time} ({time.ctime(new_time)})")
+    print(f"   세션 데이터: {dict(request.session)}")
 
 
 def logout_user(request: Request) -> None:
