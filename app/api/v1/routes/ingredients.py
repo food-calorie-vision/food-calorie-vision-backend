@@ -1,9 +1,11 @@
 """식재료 관련 라우트"""
-import os
 from datetime import datetime
+from functools import lru_cache
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from langchain.schema import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,12 +17,44 @@ from app.api.v1.schemas.ingredient import (
     RecommendationData,
 )
 from app.api.dependencies import require_authentication
+from app.core.config import get_settings
 from app.db.models import UserIngredient, User, DiseaseAllergyProfile
 from app.db.session import get_session
 from app.services.roboflow_service import get_roboflow_service
 from app.services.gpt_vision_service import get_gpt_vision_service
 
 router = APIRouter()
+settings = get_settings()
+
+
+@lru_cache
+def get_recommendation_llm() -> ChatOpenAI:
+    if not settings.openai_api_key:
+        raise ValueError("OPENAI_API_KEY 환경 변수가 필요합니다.")
+    return ChatOpenAI(
+        api_key=settings.openai_api_key,
+        model="gpt-4o-mini",
+        temperature=0.7,
+    )
+
+
+async def save_major_conversation(session: AsyncSession, user: User, raw_text: str) -> None:
+    """
+    LangChain을 사용해 대화 내용을 요약하고 User.major_conversation에 저장
+    """
+    llm = get_recommendation_llm()
+    try:
+        summary_prompt = f"다음 내용을 400자 이내 한국어로 요약하세요:\n\n{raw_text}"
+        summary_response = await llm.ainvoke([
+            SystemMessage(content="당신은 요약 도우미입니다."),
+            HumanMessage(content=summary_prompt)
+        ])
+        summary = summary_response.content.strip()
+    except Exception as exc:
+        print(f"⚠️ 대화 요약 실패, 원문 일부 저장: {exc}")
+        summary = raw_text[:400]
+    user.major_conversation = summary[:2000]
+    await session.commit()
 
 
 @router.post("/save", response_model=ApiResponse[SaveIngredientsData])
@@ -298,6 +332,8 @@ async def get_food_recommendations(
                 message="✅ 저장된 식재료가 없어 기본 샐러드 레시피를 알려드려요! 식재료를 추가하시면 더 다양한 레시피를 추천해드릴게요 🥗"
             )
         
+        previous_summary = user.major_conversation
+        
         # 건강 목표 한글 변환
         health_goal_text = {
             'gain': '체중 증가',
@@ -307,16 +343,8 @@ async def get_food_recommendations(
         
         # 4. GPT를 사용하여 맞춤형 음식 추천 생성
         try:
-            from openai import OpenAI
-            
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                raise ValueError("OPENAI_API_KEY 환경 변수가 설정되지 않았습니다.")
-            
-            print(f"🔑 API 키 확인: {api_key[:20]}... (총 {len(api_key)}자)")
-            
-            client = OpenAI(api_key=api_key)
-            
+            llm = get_recommendation_llm()
+                        
             # 건강 정보 문자열 생성
             health_info = f"""
 사용자 건강 정보:
@@ -334,12 +362,14 @@ async def get_food_recommendations(
             if len(ingredients) < 3:
                 ingredient_shortage_note = f"\n\n⚠️ **현재 보유 식재료가 {len(ingredients)}개로 적은 편입니다.** 가능한 보유 재료를 최대한 활용하되, 추가로 필요한 재료가 있어도 괜찮습니다."
             
+            previous_summary_note = f"\n\n**이전 대화 요약:**\n{previous_summary}" if previous_summary else ""
+            
             prompt = f"""당신은 전문 영양사이자 요리사입니다. 
 
 {health_info}
 
 보유 식재료:
-{ingredient_text}{ingredient_note}{ingredient_shortage_note}
+{ingredient_text}{ingredient_note}{ingredient_shortage_note}{previous_summary_note}
 
 **중요한 제약사항:**
 {f"1. ⚠️ 알러지 주의: {', '.join(allergies)} - 이 재료들은 절대 사용하지 마세요!" if allergies else ""}
@@ -381,19 +411,13 @@ async def get_food_recommendations(
 - ingredients 배열에는 보유 재료를 앞에 배치하고, 필요한 추가 재료를 뒤에 배치하세요
 - 알러지 재료는 절대 포함하지 마세요!
 """
-
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "당신은 친절하고 전문적인 영양사이자 요리사입니다. 반드시 JSON 형식으로만 응답합니다."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7,
-                max_tokens=2000,
-                response_format={"type": "json_object"}
-            )
-            
-            recommendation_text = response.choices[0].message.content
+            messages = [
+                SystemMessage(content="당신은 친절하고 전문적인 영양사이자 요리사입니다. 반드시 JSON 형식으로만 응답합니다."),
+                HumanMessage(content=prompt)
+            ]
+            response = await llm.ainvoke(messages)
+            recommendation_text = response.content
+            await save_major_conversation(session, user, recommendation_text)
             
         except Exception as e:
             print(f"⚠️ OpenAI API 호출 실패: {e}")
@@ -474,6 +498,7 @@ async def get_food_recommendations(
             recommendation_text = json.dumps({
                 "foods": fallback_foods
             }, ensure_ascii=False)
+            await save_major_conversation(session, user, recommendation_text)
         
         # 메시지 생성 (재료 수에 따라)
         if len(ingredients) == 0:
@@ -547,7 +572,7 @@ async def analyze_ingredients_with_roboflow_gpt(
         image_with_boxes = roboflow_service.draw_bboxes_on_image(image_bytes, detections)
         
         # 3. GPT Vision으로 통합 분석
-        identified_ingredients = gpt_service.analyze_ingredients_with_boxes(
+        identified_ingredients = await gpt_service.analyze_ingredients_with_boxes(
             image_with_boxes,
             len(detections),
             roboflow_hints

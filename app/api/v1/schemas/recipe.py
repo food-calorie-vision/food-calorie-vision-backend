@@ -1,6 +1,15 @@
 """레시피 추천 관련 스키마"""
+from enum import Enum
 from typing import Optional, List
 from pydantic import BaseModel, Field
+
+
+class RecipeActionType(str, Enum):
+    CONFIRMATION = "CONFIRMATION"
+    RECOMMENDATION_RESULT = "RECOMMENDATION_RESULT"
+    TEXT_ONLY = "TEXT_ONLY"
+    INGREDIENT_CHECK = "INGREDIENT_CHECK"
+    COOKING_STEPS = "COOKING_STEPS"
 
 
 class RecipeRecommendation(BaseModel):
@@ -20,12 +29,21 @@ class RecipeRecommendationRequest(BaseModel):
     meal_type: Optional[str] = Field(None, description="식사 유형 (breakfast, lunch, dinner, snack)")
 
 
-class RecipeRecommendationResponse(BaseModel):
-    """레시피 추천 응답"""
-    inferred_preference: str = Field(..., description="추론된 선호도 (시스템용)")
+class RecipeRecommendationData(BaseModel):
+    """에이전트 응답 데이터"""
+    recipes: Optional[List[RecipeRecommendation]] = Field(None, description="추천 레시피 목록")
+    inferred_preference: Optional[str] = Field(None, description="추론된 선호도")
     health_warning: Optional[str] = Field(None, description="건강 경고 메시지")
-    user_friendly_message: str = Field(..., description="사용자에게 보여줄 친화적 메시지")
-    recommendations: List[RecipeRecommendation] = Field(..., description="추천 레시피 목록")
+    user_friendly_message: Optional[str] = Field(None, description="사용자 친화적 메시지")
+
+
+class RecipeRecommendationResponse(BaseModel):
+    """에이전트 응답 래퍼"""
+    response_id: str = Field(..., description="응답 추적용 ID")
+    action_type: RecipeActionType = Field(..., description="다음 UI 동작을 결정하는 Action 타입")
+    message: str = Field(..., description="챗봇이 사용자에게 전달할 기본 메시지")
+    data: Optional[RecipeRecommendationData] = Field(None, description="추가 데이터(레시피, 메타 등)")
+    suggestions: Optional[List[str]] = Field(None, description="빠른 응답 또는 추천 문구")
 
 
 class RecipeIngredient(BaseModel):
@@ -79,3 +97,35 @@ class SaveRecipeRequest(BaseModel):
     food_class_1: Optional[str] = Field(None, description="음식 대분류 (예: 볶음류, 구이류, 찜류 등)")
 
 
+class IngredientCheckRequest(BaseModel):
+    """재료 확인 요청"""
+    recipe_name: str = Field(..., description="레시피 이름")
+
+
+class IngredientCheckResponse(BaseModel):
+    """재료 확인 응답"""
+    response_id: str = Field(..., description="응답 추적용 ID")
+    action_type: RecipeActionType = Field(RecipeActionType.INGREDIENT_CHECK, description="INGREDIENT_CHECK 고정")
+    recipe_name: str = Field(..., description="레시피 이름")
+    ingredients: List[str] = Field(..., description="필수 재료 목록")
+
+
+class CustomRecipeRequest(BaseModel):
+    """맞춤 조리법 생성 요청"""
+    recipe_name: str = Field(..., description="레시피 이름")
+    excluded_ingredients: List[str] = Field(default_factory=list, description="사용자가 제외할 재료 목록")
+    meal_type: Optional[str] = Field(None, description="선택된 식사 유형")
+    available_ingredients: List[str] = Field(default_factory=list, description="원래 레시피의 재료 목록")
+
+
+class CustomRecipeResponse(BaseModel):
+    """맞춤 조리법 응답"""
+    response_id: str = Field(..., description="응답 추적용 ID")
+    action_type: RecipeActionType = Field(RecipeActionType.COOKING_STEPS, description="COOKING_STEPS 고정")
+    recipe_name: str = Field(..., description="레시피 이름")
+    ingredients: List[RecipeIngredient] = Field(..., description="변경된 재료 목록")
+    instructions_markdown: str = Field(..., description="마크다운 형태의 조리 단계")
+    steps: List[RecipeStep] = Field(..., description="맞춤 조리 단계 목록")
+    nutrition_info: NutritionInfo = Field(..., description="맞춤 영양 정보")
+    estimated_time: Optional[str] = Field(None, description="예상 조리 시간")
+    intro: Optional[str] = Field(None, description="조리 도입부 설명")
