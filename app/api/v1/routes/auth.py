@@ -154,3 +154,15 @@ async def get_current_user(
         created_at=user.created_at.isoformat() if user.created_at else None,
         updated_at=user.updated_at.isoformat() if user.updated_at else None,
     )
+
+
+@router.post("/refresh-session")
+async def refresh_session(request: Request) -> dict:
+    """
+    세션 갱신 (사용자 활동 시 호출)
+    """
+    if not is_authenticated(request):
+        raise HTTPException(status_code=401, detail="인증이 필요합니다.")
+    
+    # 세션이 유효하면 자동으로 갱신됨 (SessionMiddleware의 sliding session)
+    return {"success": True, "message": "세션이 갱신되었습니다."}

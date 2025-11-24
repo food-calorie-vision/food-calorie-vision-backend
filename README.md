@@ -99,7 +99,7 @@ SESSION_SAME_SITE=lax
 - `.env` 파일은 Git에 커밋하지 마세요! (이미 `.gitignore`에 포함됨)
 - OpenAI API 키 발급: https://platform.openai.com/api-keys
 
-📖 **자세한 설정 가이드:** [ENV_SETUP_GUIDE.md](./ENV_SETUP_GUIDE.md)
+📖 **자세한 설정 가이드:** [ENV_SETUP_GUIDE.md](./docs/ENV_SETUP_GUIDE.md)
 
 ### 4. 데이터베이스 마이그레이션 (ERDCloud 스키마)
 
@@ -219,7 +219,7 @@ curl -X POST "http://localhost:8000/api/v1/food/analysis-upload" \
 }
 ```
 
-📖 **자세한 설정 가이드:** [YOLO_GPT_VISION_SETUP.md](./YOLO_GPT_VISION_SETUP.md)
+📖 **자세한 설정 가이드:** [YOLO_GPT_VISION_SETUP.md](./docs/YOLO_GPT_VISION_SETUP.md)
 
 ---
 
