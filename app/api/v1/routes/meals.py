@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from app.api.v1.schemas.common import ApiResponse
 from app.db.models import UserFoodHistory, HealthScore, User, Food, UserIngredient
 from app.db.models_food_nutrients import FoodNutrient
+from app.db.models_user_contributed import UserContributedFood
 from app.db.session import get_session
 from app.services.health_score_service import (
     create_health_score,
@@ -77,6 +78,7 @@ class MealRecordResponse(BaseModel):
     calories: int
     health_score: Optional[int] = None
     food_grade: Optional[str] = None
+    meal_type: Optional[str] = None  # 식사 유형 추가
 
 
 class DashboardStatsResponse(BaseModel):
@@ -408,7 +410,8 @@ async def get_meal_history(
                 portion_size_g=history.portion_size_g or 0,
                 calories=health_score.kcal if health_score else 0,
                 health_score=health_score.final_score if health_score else None,
-                food_grade=health_score.food_grade if health_score else None
+                food_grade=health_score.food_grade if health_score else None,
+                meal_type=history.meal_type  # 식사 유형 추가
             ))
         
         return ApiResponse(
@@ -598,12 +601,77 @@ async def save_recommended_meal(
         )
         print(f"  ✅ NRF9.3 점수: {score_result['final_score']}, 등급: {score_result['food_grade']}")
         
-        # ========== STEP 4: Food 테이블 확인/생성 ==========
-        print(f"🍽️ STEP 4: Food 테이블 처리")
-        food_id = f"recommended_{request.food_name}_{int(datetime.now().timestamp())}"
+        # ========== STEP 4: food_nutrients에서 실제 음식 매칭 ==========
+        print(f"🍽️ STEP 4: food_nutrients 매칭 처리")
+        from app.services.food_matching_service import get_food_matching_service
         
-        # Food 테이블에 있는지 확인
-        food_stmt = select(Food).where(Food.food_name == request.food_name)
+        matching_service = get_food_matching_service()
+        
+        # DB에서 실제 음식 매칭 (user_id 전달)
+        matched_food_nutrient = await matching_service.match_food_to_db(
+            session=session,
+            food_name=request.food_name,
+            ingredients=request.ingredients_used if request.ingredients_used else [],
+            food_class_hint=None,
+            user_id=user_id
+        )
+        
+        # 매칭된 food_id 사용
+        if matched_food_nutrient:
+            actual_food_id = matched_food_nutrient.food_id
+            actual_food_class_1 = getattr(matched_food_nutrient, 'food_class1', None)
+            actual_food_class_2 = getattr(matched_food_nutrient, 'food_class2', None)
+            
+            # FoodNutrient인지 UserContributedFood인지 확인
+            if isinstance(matched_food_nutrient, FoodNutrient):
+                print(f"✅ food_nutrients 매칭 성공: {actual_food_id} - {matched_food_nutrient.nutrient_name}")
+            else:
+                print(f"✅ user_contributed_foods 매칭 성공: {actual_food_id} - {matched_food_nutrient.food_name}")
+        else:
+            # 매칭 실패 시: user_contributed_foods에 새로 추가
+            print(f"⚠️ 매칭 실패, user_contributed_foods에 새로 추가")
+            
+            # 재료 문자열 변환
+            ingredients_str = ", ".join(request.ingredients_used) if request.ingredients_used else None
+            
+            # 새로운 food_id 생성
+            actual_food_id = f"USER_{user_id}_{int(datetime.now().timestamp())}"[:200]
+            actual_food_class_1 = "사용자추가"
+            actual_food_class_2 = request.ingredients_used[0] if request.ingredients_used else None
+            
+            # user_contributed_foods에 추가
+            new_contributed_food = UserContributedFood(
+                food_id=actual_food_id,
+                user_id=user_id,
+                food_name=request.food_name,
+                nutrient_name=request.food_name,
+                food_class1=actual_food_class_1,
+                food_class2=actual_food_class_2,
+                ingredients=ingredients_str,
+                unit="g",
+                reference_value=request.portion_size_g,
+                protein=nutrition_data.get("protein", 0),
+                carb=nutrition_data.get("carb", 0),
+                fat=nutrition_data.get("fat", 0),
+                fiber=nutrition_data.get("fiber", 0),
+                vitamin_a=nutrition_data.get("vitamin_a", 0),
+                vitamin_c=nutrition_data.get("vitamin_c", 0),
+                calcium=nutrition_data.get("calcium", 0),
+                iron=nutrition_data.get("iron", 0),
+                potassium=nutrition_data.get("potassium", 0),
+                magnesium=nutrition_data.get("magnesium", 0),
+                saturated_fat=nutrition_data.get("saturated_fat", 0),
+                added_sugar=nutrition_data.get("added_sugar", 0),
+                sodium=nutrition_data.get("sodium", 0),
+                usage_count=1
+            )
+            session.add(new_contributed_food)
+            await session.flush()
+            
+            print(f"✅ user_contributed_foods에 저장: {actual_food_id} - {request.food_name}")
+        
+        # Food 테이블 확인/생성
+        food_stmt = select(Food).where(Food.food_id == actual_food_id)
         food_result = await session.execute(food_stmt)
         food = food_result.scalar_one_or_none()
         
@@ -613,18 +681,20 @@ async def save_recommended_meal(
             
             # 새로 생성
             food = Food(
-                food_id=food_id,
+                food_id=actual_food_id,
                 food_name=request.food_name,
                 category="추천음식",
-                food_class_2=request.food_name,
+                food_class_1=actual_food_class_1,
+                food_class_2=actual_food_class_2,
                 ingredients=ingredients_str
             )
             session.add(food)
             await session.flush()
-            print(f"  ✅ Food 생성: {food_id}, 재료: {ingredients_str}")
+            print(f"  ✅ Food 생성: {actual_food_id}, 재료: {ingredients_str}")
         else:
-            food_id = food.food_id
-            print(f"  ✅ Food 존재: {food_id}")
+            print(f"  ✅ Food 존재: {actual_food_id}")
+        
+        food_id = actual_food_id
         
         # ========== STEP 5: UserFoodHistory 저장 ==========
         print(f"📝 STEP 5: UserFoodHistory 저장")
@@ -992,4 +1062,71 @@ async def get_score_detail(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"상세 점수 현황 조회 중 오류 발생: {str(e)}")
+
+
+@router.delete("/history/{history_id}", response_model=ApiResponse[dict])
+async def delete_meal_history(
+    history_id: int,
+    session: AsyncSession = Depends(get_session)
+) -> ApiResponse[dict]:
+    """
+    음식 섭취 기록 삭제
+    
+    **Args:**
+        history_id: 삭제할 기록 ID
+        session: DB 세션
+        
+    **Returns:**
+        삭제 결과
+    """
+    try:
+        user_id = get_current_user_id()
+        
+        # 기록 존재 여부 및 권한 확인
+        stmt = select(UserFoodHistory).where(
+            and_(
+                UserFoodHistory.history_id == history_id,
+                UserFoodHistory.user_id == user_id
+            )
+        )
+        result = await session.execute(stmt)
+        history = result.scalar_one_or_none()
+        
+        if not history:
+            raise HTTPException(
+                status_code=404, 
+                detail="기록을 찾을 수 없거나 삭제 권한이 없습니다."
+            )
+        
+        # HealthScore도 함께 삭제
+        health_score_stmt = select(HealthScore).where(
+            and_(
+                HealthScore.history_id == history_id,
+                HealthScore.user_id == user_id
+            )
+        )
+        health_score_result = await session.execute(health_score_stmt)
+        health_score = health_score_result.scalar_one_or_none()
+        
+        if health_score:
+            await session.delete(health_score)
+        
+        # UserFoodHistory 삭제
+        await session.delete(history)
+        await session.commit()
+        
+        return ApiResponse(
+            success=True,
+            data={"history_id": history_id, "deleted": True},
+            message=f"✅ '{history.food_name}' 기록이 삭제되었습니다."
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        await session.rollback()
+        print(f"❌ 음식 기록 삭제 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"기록 삭제 중 오류 발생: {str(e)}")
 

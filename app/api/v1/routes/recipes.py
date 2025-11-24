@@ -14,6 +14,7 @@ from app.api.v1.schemas.recipe import (
 from app.api.v1.schemas.common import ApiResponse
 from app.db.models import User, Food, UserFoodHistory, HealthScore, DiseaseAllergyProfile
 from app.db.models_food_nutrients import FoodNutrient
+from app.db.models_user_contributed import UserContributedFood
 from app.db.session import get_session
 from app.utils.session import get_current_user_id, is_authenticated
 from app.services.recipe_recommendation_service import get_recipe_recommendation_service
@@ -420,47 +421,95 @@ async def save_recipe_as_meal(
         actual_fiber_g = fiber_g * save_request.actual_servings
         actual_sodium_mg = sodium_mg * save_request.actual_servings
         
-        # ========== STEP 1: Food 테이블 확인/생성 ==========
-        # food_name으로 검색
-        food_stmt = select(Food).where(Food.food_name == save_request.recipe_name)
+        # ========== STEP 1: food_nutrients에서 실제 음식 매칭 ==========
+        from app.services.food_matching_service import get_food_matching_service
+        
+        matching_service = get_food_matching_service()
+        
+        # 재료 리스트 추출
+        ingredient_list = save_request.ingredients if save_request.ingredients else []
+        
+        # DB에서 실제 음식 매칭 (user_id 전달)
+        matched_food_nutrient = await matching_service.match_food_to_db(
+            session=session,
+            food_name=save_request.recipe_name,
+            ingredients=ingredient_list,
+            food_class_hint=save_request.food_class_1,
+            user_id=user_id
+        )
+        
+        # 매칭된 food_id 사용
+        if matched_food_nutrient:
+            actual_food_id = matched_food_nutrient.food_id
+            actual_food_class_1 = getattr(matched_food_nutrient, 'food_class1', None)
+            actual_food_class_2 = getattr(matched_food_nutrient, 'food_class2', None)
+            
+            if isinstance(matched_food_nutrient, FoodNutrient):
+                print(f"✅ food_nutrients 매칭 성공: {actual_food_id} - {matched_food_nutrient.nutrient_name}")
+            else:
+                print(f"✅ user_contributed_foods 매칭 성공: {actual_food_id} - {matched_food_nutrient.food_name}")
+        else:
+            # 매칭 실패 시: user_contributed_foods에 새로 추가
+            print(f"⚠️ 매칭 실패, user_contributed_foods에 새로 추가")
+            
+            actual_food_id = f"USER_{user_id}_{int(datetime.now().timestamp())}"[:200]
+            actual_food_class_1 = save_request.food_class_1 or "사용자추가"
+            actual_food_class_2 = save_request.recipe_name
+            
+            # user_contributed_foods에 추가
+            new_contributed_food = UserContributedFood(
+                food_id=actual_food_id,
+                user_id=user_id,
+                food_name=save_request.recipe_name,
+                nutrient_name=save_request.recipe_name,
+                food_class1=actual_food_class_1,
+                food_class2=actual_food_class_2,
+                ingredients=", ".join(ingredient_list) if ingredient_list else None,
+                unit="g",
+                reference_value=save_request.portion_size_g,
+                protein=actual_protein_g,
+                carb=actual_carbs_g,
+                fat=actual_fat_g,
+                fiber=actual_fiber_g,
+                sodium=actual_sodium_mg,
+                usage_count=1
+            )
+            session.add(new_contributed_food)
+            await session.flush()
+            
+            print(f"✅ user_contributed_foods에 저장: {actual_food_id} - {save_request.recipe_name}")
+        
+        # Food 테이블 확인/생성
+        food_stmt = select(Food).where(Food.food_id == actual_food_id)
         food_result = await session.execute(food_stmt)
         food = food_result.scalar_one_or_none()
         
         if not food:
-            # Food 레코드 생성 (food_id는 UUID 생성)
-            food_id = str(uuid.uuid4())[:200]  # VARCHAR(200) 제한
-            
             # 재료 목록을 콤마로 구분된 문자열로 변환
-            ingredients_str = ""
-            if save_request.ingredients:
-                ingredients_str = ", ".join(save_request.ingredients)
-            
-            # 음식 분류 설정 (기본값: 요리)
-            food_class_1 = save_request.food_class_1 or "요리"
+            ingredients_str = ", ".join(ingredient_list) if ingredient_list else None
             
             food = Food(
-                food_id=food_id,
+                food_id=actual_food_id,
                 food_name=save_request.recipe_name,
                 category="요리",
-                food_class_1=food_class_1,  # 음식 대분류 (볶음류, 구이류 등)
-                food_class_2=save_request.recipe_name,  # 음식 명칭
-                ingredients=ingredients_str if ingredients_str else None  # 재료 목록
+                food_class_1=actual_food_class_1,
+                food_class_2=actual_food_class_2,
+                ingredients=ingredients_str
             )
             session.add(food)
             await session.flush()
             print(f"✅ 새로운 Food 레코드 생성: {food.food_name} (ID={food.food_id})")
             print(f"   - 재료: {ingredients_str}")
-            print(f"   - 분류: {food_class_1}")
+            print(f"   - 분류: {actual_food_class_1}")
         else:
-            food_id = food.food_id
             # 기존 레코드가 있어도 재료 정보 업데이트
-            if save_request.ingredients:
-                ingredients_str = ", ".join(save_request.ingredients)
+            if ingredient_list:
+                ingredients_str = ", ".join(ingredient_list)
                 food.ingredients = ingredients_str
                 print(f"✅ 기존 Food 레코드 재료 정보 업데이트: {ingredients_str}")
-            if save_request.food_class_1:
-                food.food_class_1 = save_request.food_class_1
-            print(f"✅ 기존 Food 레코드 사용: {food.food_name} (ID={food_id})")
+            print(f"✅ 기존 Food 레코드 사용: {food.food_name} (ID={actual_food_id})")
+        
+        food_id = actual_food_id
         
         # ========== STEP 2: FoodNutrient 테이블에 영양소 정보 저장 (선택사항) ==========
         # 나중에 조회할 수 있도록 저장

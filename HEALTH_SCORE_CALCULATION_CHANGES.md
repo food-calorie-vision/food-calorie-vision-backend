@@ -120,3 +120,4 @@ raw_score = positive_score - (negative_score * 0.15)
 - 기본 영양소 보정 시도
 - 점수가 47-48점으로 낮게 나옴
 
+

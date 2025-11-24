@@ -16,6 +16,8 @@ from app.api.v1.schemas.vision import (
     SaveFoodRequest,
     SaveFoodResponse,
 )
+from app.db.models_food_nutrients import FoodNutrient
+from app.db.models_user_contributed import UserContributedFood
 from app.db.session import get_session
 from app.services.gpt_vision_service import get_gpt_vision_service
 from app.services.yolo_service import get_yolo_service
@@ -466,27 +468,59 @@ async def save_user_food(
     try:
         print(f"💾 음식 저장 요청: user_id={request.user_id}, food_name={request.food_name}")
         
-        # 1. food_nutrients에서 영양소 정보 조회
+        # 1. food_nutrients에서 영양소 정보 조회 (개선된 매칭 서비스 사용)
         print("🔍 food_nutrients에서 음식 정보 조회 중...")
-        food_nutrient = await get_best_match_for_food(
-            session,
+        from app.services.food_matching_service import get_food_matching_service
+        
+        matching_service = get_food_matching_service()
+        food_nutrient = await matching_service.match_food_to_db(
+            session=session,
             food_name=request.food_name,
-            ingredients=request.ingredients
+            ingredients=request.ingredients,
+            food_class_hint=request.food_class_1,
+            user_id=request.user_id
         )
         
-        # 2. food_id 결정 (food_nutrients의 food_id 사용)
+        # 2. food_id 결정
         if food_nutrient:
             actual_food_id = food_nutrient.food_id
-            # food_nutrients의 분류 정보도 가져오기
-            actual_food_class_1 = food_nutrient.food_class1
-            actual_food_class_2 = food_nutrient.food_class2
-            print(f"✅ food_nutrients에서 매칭: {actual_food_id} (분류: {actual_food_class_1} > {actual_food_class_2})")
+            actual_food_class_1 = getattr(food_nutrient, 'food_class1', None)
+            actual_food_class_2 = getattr(food_nutrient, 'food_class2', None)
+            
+            if isinstance(food_nutrient, FoodNutrient):
+                print(f"✅ food_nutrients에서 매칭: {actual_food_id} (분류: {actual_food_class_1} > {actual_food_class_2})")
+            else:
+                print(f"✅ user_contributed_foods에서 매칭: {actual_food_id} - {food_nutrient.food_name}")
         else:
-            # 매칭 실패 시 기본 ID 생성
-            actual_food_id = generate_food_id(request.food_name, request.ingredients)
-            actual_food_class_1 = request.food_class_1
-            actual_food_class_2 = request.food_class_2
-            print(f"⚠️ food_nutrients 매칭 실패, 새 ID 생성: {actual_food_id}")
+            # 매칭 실패 시: user_contributed_foods에 새로 추가
+            print(f"⚠️ 매칭 실패, user_contributed_foods에 새로 추가")
+            
+            actual_food_id = f"USER_{request.user_id}_{int(datetime.now().timestamp())}"[:200]
+            actual_food_class_1 = request.food_class_1 or "사용자추가"
+            actual_food_class_2 = request.food_class_2 or (request.ingredients[0] if request.ingredients else None)
+            
+            # user_contributed_foods에 추가
+            new_contributed_food = UserContributedFood(
+                food_id=actual_food_id,
+                user_id=request.user_id,
+                food_name=request.food_name,
+                nutrient_name=request.food_name,
+                food_class1=actual_food_class_1,
+                food_class2=actual_food_class_2,
+                ingredients=", ".join(request.ingredients) if request.ingredients else None,
+                unit="g",
+                reference_value=request.portion_size_g,
+                protein=request.protein,
+                carb=request.carbs,
+                fat=request.fat,
+                sodium=request.sodium,
+                fiber=request.fiber,
+                usage_count=1
+            )
+            session.add(new_contributed_food)
+            await session.flush()
+            
+            print(f"✅ user_contributed_foods에 저장: {actual_food_id} - {request.food_name}")
         
         # 3. Food 테이블에 음식 저장/조회 (food_nutrients 정보 활용)
         food = await get_or_create_food(
