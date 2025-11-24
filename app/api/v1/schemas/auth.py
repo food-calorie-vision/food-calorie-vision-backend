@@ -80,3 +80,5 @@ class UserInfoResponse(BaseModel):
     health_goal: str
     created_at: str | None = None
     updated_at: str | None = None
+    session_max_age: int | None = None  # 세션 최대 유효 시간 (초)
+    session_remaining: int | None = None  # 남은 세션 시간 (초, 추정값)
