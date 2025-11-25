@@ -122,6 +122,13 @@ class ScoreDetailResponse(BaseModel):
     weekly_trend: List[dict] = Field(..., description="주간 트렌드")
 
 
+class MostEatenFood(BaseModel):
+    """자주 먹은 음식"""
+    food_id: str = Field(..., description="음식 ID")
+    food_name: str = Field(..., description="음식 이름")
+    eat_count: int = Field(..., description="먹은 횟수")
+
+
 # ========== API 엔드포인트 ==========
 
 @router.post("/save", response_model=ApiResponse[List[MealRecordResponse]])
@@ -464,11 +471,11 @@ async def save_recommended_meal(
     try:
         # ========== STEP 1: 식재료 사용 처리 ==========
         # ingredients_with_quantity 우선, 없으면 레거시 방식
+        missing_ingredients = []
         if request.ingredients_with_quantity:
-            print(f"🥕 STEP 1: 식재료 사용 처리 (수량 포함)")
+            print(f"🥕 STEP 1: 식재료 사용 처리 (체크된 재료 = DB에서 완전 삭제)")
             for ingredient_usage in request.ingredients_with_quantity:
                 ingredient_name = ingredient_usage.name
-                quantity_to_use = ingredient_usage.quantity
                 
                 stmt = select(UserIngredient).where(
                     UserIngredient.user_id == user_id,
@@ -480,20 +487,18 @@ async def save_recommended_meal(
                 ingredient = result.scalar_one_or_none()
                 
                 if ingredient:
-                    if ingredient.count > quantity_to_use:
-                        ingredient.count -= quantity_to_use
-                        print(f"  - {ingredient_name}: 수량 감소 ({ingredient.count + quantity_to_use} → {ingredient.count})")
-                    elif ingredient.count == quantity_to_use:
-                        ingredient.is_used = True
-                        print(f"  - {ingredient_name}: 사용 완료 (is_used = True)")
-                    else:
-                        # 보유량보다 많이 사용하려는 경우 - 보유량 전체 사용
-                        print(f"  ⚠️ {ingredient_name}: 보유량({ingredient.count})보다 많이 사용({quantity_to_use}) - 전체 사용")
-                        ingredient.is_used = True
+                    # 체크된 재료는 DB에서 완전 삭제 (DELETE)
+                    await session.delete(ingredient)
+                    print(f"  🗑️ {ingredient_name}: DB에서 완전 삭제!")
                 else:
-                    print(f"  ⚠️ {ingredient_name}: UserIngredient에 없음 (건너뜀)")
+                    print(f"  ⚠️ {ingredient_name}: 식재료 테이블에 없음")
+                    missing_ingredients.append(ingredient_name)
+            
+            # 없는 재료가 있으면 경고 메시지
+            if missing_ingredients:
+                print(f"  ⚠️ 현재 식재료에 없는 재료: {', '.join(missing_ingredients)}")
         else:
-            # 레거시: ingredients_used 배열 (각 재료 1개씩)
+            # 레거시: ingredients_used 배열 (체크 없이 저장된 경우)
             print(f"🥕 STEP 1: 식재료 사용 처리 (레거시) - {request.ingredients_used}")
             for ingredient_name in request.ingredients_used:
                 stmt = select(UserIngredient).where(
@@ -506,12 +511,9 @@ async def save_recommended_meal(
                 ingredient = result.scalar_one_or_none()
                 
                 if ingredient:
-                    if ingredient.count > 1:
-                        ingredient.count -= 1
-                        print(f"  - {ingredient_name}: 수량 감소 ({ingredient.count + 1} → {ingredient.count})")
-                    else:
-                        ingredient.is_used = True
-                        print(f"  - {ingredient_name}: 사용 완료 (is_used = True)")
+                    # DB에서 완전 삭제
+                    await session.delete(ingredient)
+                    print(f"  🗑️ {ingredient_name}: DB에서 완전 삭제!")
                 else:
                     print(f"  ⚠️ {ingredient_name}: UserIngredient에 없음 (건너뜀)")
         
@@ -580,6 +582,13 @@ async def save_recommended_meal(
                 "added_sugar_g": 5.0,
                 "sodium_mg": 800.0
             }
+        
+        # 없는 재료가 있으면 사용자에게 알림
+        if missing_ingredients:
+            missing_msg = f"⚠️ 다음 재료는 현재 식재료에 없습니다: {', '.join(missing_ingredients)}"
+            # 계속 진행하되 메시지 포함
+        else:
+            missing_msg = None
         
         # ========== STEP 3: NRF9.3 점수 계산 ==========
         print(f"📊 STEP 3: NRF9.3 점수 계산")
@@ -755,10 +764,15 @@ async def save_recommended_meal(
             food_grade=health_score_obj.food_grade
         )
         
+        # 메시지 생성
+        success_message = f"✅ {request.food_name} 기록 완료! NRF9.3 점수: {score_result['final_score']:.1f}점"
+        if missing_msg:
+            success_message += f"\n\n{missing_msg}"
+        
         return ApiResponse(
             success=True,
             data=response_data,
-            message=f"✅ {request.food_name} 기록 완료! NRF9.3 점수: {score_result['final_score']:.1f}점"
+            message=success_message
         )
         
     except Exception as e:
@@ -1127,3 +1141,70 @@ async def delete_meal_history(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"기록 삭제 중 오류 발생: {str(e)}")
+
+
+@router.get("/most-eaten", response_model=ApiResponse[List[MostEatenFood]])
+async def get_most_eaten_foods(
+    limit: int = 4,
+    session: AsyncSession = Depends(get_session),
+    user_id: int = Depends(require_authentication)
+) -> ApiResponse[List[MostEatenFood]]:
+    """
+    자주 먹은 음식 TOP N
+    
+    **처리 과정:**
+    1. UserFoodHistory에서 food_id별 카운트
+    2. 내림차순 정렬
+    3. 상위 N개 반환
+    
+    **Args:**
+        limit: 반환할 음식 개수 (기본 4개)
+        session: DB 세션
+        user_id: 사용자 ID
+        
+    **Returns:**
+        자주 먹은 음식 목록
+    """
+    try:
+        print(f"🍽️ 자주 먹은 음식 조회: user_id={user_id}, limit={limit}")
+        
+        # food_id별 카운트 쿼리
+        stmt = (
+            select(
+                UserFoodHistory.food_id,
+                UserFoodHistory.food_name,
+                func.count(UserFoodHistory.history_id).label('eat_count')
+            )
+            .where(UserFoodHistory.user_id == user_id)
+            .group_by(UserFoodHistory.food_id, UserFoodHistory.food_name)
+            .order_by(func.count(UserFoodHistory.history_id).desc())
+            .limit(limit)
+        )
+        
+        result = await session.execute(stmt)
+        rows = result.all()
+        
+        most_eaten_list = [
+            MostEatenFood(
+                food_id=row.food_id,
+                food_name=row.food_name,
+                eat_count=row.eat_count
+            )
+            for row in rows
+        ]
+        
+        print(f"✅ 자주 먹은 음식 {len(most_eaten_list)}개 조회 완료")
+        for idx, food in enumerate(most_eaten_list, 1):
+            print(f"  {idx}. {food.food_name}: {food.eat_count}번")
+        
+        return ApiResponse(
+            success=True,
+            data=most_eaten_list,
+            message=f"✅ 자주 먹은 음식 {len(most_eaten_list)}개를 조회했습니다."
+        )
+        
+    except Exception as e:
+        print(f"❌ 자주 먹은 음식 조회 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"자주 먹은 음식 조회 중 오류 발생: {str(e)}")
