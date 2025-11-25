@@ -2,7 +2,8 @@
 from typing import Optional, List, Dict, Union
 from sqlalchemy import select, or_, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from openai import AsyncOpenAI
+from langchain_openai import ChatOpenAI
+from langchain.schema import SystemMessage, HumanMessage
 
 from app.db.models_food_nutrients import FoodNutrient
 from app.db.models_user_contributed import UserContributedFood
@@ -52,9 +53,13 @@ class FoodMatchingService:
     
     def __init__(self):
         if settings.openai_api_key:
-            self.client = AsyncOpenAI(api_key=settings.openai_api_key)
+            self.llm = ChatOpenAI(
+                api_key=settings.openai_api_key,
+                model="gpt-4o-mini",
+                temperature=0.2,
+            )
         else:
-            self.client = None
+            self.llm = None
     
     async def match_food_to_db(
         self,
@@ -557,7 +562,7 @@ class FoodMatchingService:
         - nutrient_name: "국밥_덮치마리" 형식
         - food_class1: "곡밥류" 형식
         """
-        if not self.client:
+        if not self.llm:
             return None
         
         try:
@@ -624,17 +629,12 @@ class FoodMatchingService:
 **중요:** food_id만 정확히 답변하세요. (예: D101-00431000D-0001)
 설명 없이 food_id만 출력하세요."""
             
-            response = await self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "당신은 한국 음식 분류 전문가입니다. food_id만 정확히 답변하세요."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=100,
-                temperature=0.2
-            )
+            response = await self.llm.ainvoke([
+                SystemMessage(content="당신은 한국 음식 분류 전문가입니다. food_id만 정확히 답변하세요."),
+                HumanMessage(content=prompt)
+            ])
             
-            selected_food_id = response.choices[0].message.content.strip()
+            selected_food_id = response.content.strip()
             print(f"  → GPT 선택: {selected_food_id}")
             
             # 4. 선택된 food_id로 조회
@@ -808,4 +808,3 @@ def get_food_matching_service() -> FoodMatchingService:
     if _food_matching_service is None:
         _food_matching_service = FoodMatchingService()
     return _food_matching_service
-

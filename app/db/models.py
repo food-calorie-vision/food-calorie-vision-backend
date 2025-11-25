@@ -23,6 +23,7 @@ class User(Base):
     height: Mapped[Optional[float]] = mapped_column(DECIMAL(5, 2), nullable=True, comment='키 (cm)')
     health_goal: Mapped[str] = mapped_column(Enum('gain', 'maintain', 'loss', name='health_goal_enum'), nullable=False)
     nickname: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    major_conversation: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="주요 대화 요약")
     created_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, server_default=func.current_timestamp())
 

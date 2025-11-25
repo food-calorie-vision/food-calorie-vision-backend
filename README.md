@@ -59,6 +59,8 @@ pip install -r requirements.txt
 - `passlib[bcrypt]==1.7.4`: 비밀번호 해싱
 - `ultralytics==8.3.0`: YOLO11n 객체 detection
 - `openai==1.54.3`: GPT-Vision 이미지 분석
+- `langchain==0.3.4`: 대화형 에이전트 오케스트레이션
+- `langchain-openai==0.2.2`: OpenAI ChatGPT 모델 연동
 - `opencv-python==4.10.0.84`: 이미지 처리
 - `torch==2.5.1`: PyTorch (YOLO 백엔드)
 
@@ -100,6 +102,11 @@ SESSION_SAME_SITE=lax
 - OpenAI API 키 발급: https://platform.openai.com/api-keys
 
 📖 **자세한 설정 가이드:** [ENV_SETUP_GUIDE.md](./docs/ENV_SETUP_GUIDE.md)
+
+### LangChain 기반 에이전트 사용 안내
+
+- 현재 LangChain 에이전트는 **기존 `OPENAI_API_KEY` 하나만** 사용합니다.  
+- 추가 키가 필요하지 않으며, 에이전트 구성/메모리 전략은 [docs/agents.md](./docs/agents.md)를 참고하세요.
 
 ### 4. 데이터베이스 마이그레이션 (ERDCloud 스키마)
 
