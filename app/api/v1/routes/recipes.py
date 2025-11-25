@@ -3,13 +3,24 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 from datetime import datetime, date
+from typing import Optional, List, Dict, Any
 
 from app.api.v1.schemas.recipe import (
     RecipeRecommendationRequest,
     RecipeRecommendationResponse,
+    RecipeRecommendationData,
+    RecipeRecommendation,
     RecipeDetailRequest,
     RecipeDetailResponse,
-    SaveRecipeRequest
+    SaveRecipeRequest,
+    IngredientCheckRequest,
+    IngredientCheckResponse,
+    CustomRecipeRequest,
+    CustomRecipeResponse,
+    RecipeIngredient,
+    RecipeStep,
+    NutritionInfo,
+    RecipeActionType
 )
 from app.api.v1.schemas.common import ApiResponse
 from app.db.models import User, Food, UserFoodHistory, HealthScore, DiseaseAllergyProfile
@@ -22,6 +33,53 @@ from app.services.health_score_service import calculate_nrf93_score
 import uuid
 
 router = APIRouter(prefix="/recipes", tags=["Recipes"])
+
+
+def detect_meal_type_from_text(text: str | None) -> Optional[str]:
+    if not text:
+        return None
+    normalized = text.replace(" ", "").lower()
+    mapping = {
+        "breakfast": "breakfast",
+        "아침": "breakfast",
+        "모닝": "breakfast",
+        "점심": "lunch",
+        "런치": "lunch",
+        "lunch": "lunch",
+        "저녁": "dinner",
+        "디너": "dinner",
+        "dinner": "dinner",
+        "야식": "dinner",
+        "간식": "snack",
+        "스낵": "snack",
+        "snack": "snack",
+    }
+    for keyword, meal_type in mapping.items():
+        if keyword in normalized:
+            return meal_type
+    return None
+
+
+def build_user_intent_text(
+    user_request: Optional[str],
+    conversation_history: Optional[List[Dict[str, str]]]
+) -> str:
+    """대화 기록과 최신 발화를 묶어 LangChain에 전달할 사용자 의도를 구성"""
+    user_sentences: List[str] = []
+    if conversation_history:
+        for entry in conversation_history:
+            role = (entry.get("role") or "").lower()
+            content = (entry.get("content") or "").strip()
+            if role == "user" and content:
+                user_sentences.append(content)
+    latest = (user_request or "").strip()
+    if latest:
+        if not user_sentences or user_sentences[-1] != latest:
+            user_sentences.append(latest)
+    trimmed = user_sentences[-3:]  # 최근 사용자 의도 3개만 유지
+    if not trimmed:
+        return latest
+    return "\n".join(trimmed)
 
 
 @router.post("/recommendations", response_model=ApiResponse[RecipeRecommendationResponse])
@@ -75,7 +133,7 @@ async def get_recipe_recommendations(
         
         print(f"🏥 사용자 건강 정보: 질병={diseases}, 알레르기={allergies}")
         
-        # 4. 오늘 섭취한 영양소 집계 및 부족 영양소 분석
+        # 5. 오늘 섭취한 영양소 집계 및 부족 영양소 분석
         from datetime import datetime, date
         today = datetime.now().date()
         
@@ -222,6 +280,25 @@ async def get_recipe_recommendations(
         print(f"  - 칼로리 초과: {calories_exceeded}, 나트륨 초과: {sodium_exceeded}")
         print(f"  - 초과 경고: {excess_warnings}")
         
+        health_context_parts = []
+        if not has_eaten_today:
+            health_context_parts.append("오늘은 아직 아무것도 드시지 않았어요.")
+        else:
+            health_context_parts.append(
+                f"오늘 섭취 칼로리는 {total_calories:.0f}kcal, 목표는 {target_calories}kcal입니다."
+            )
+        if deficient_nutrients:
+            lacking = ", ".join([n["name"] for n in deficient_nutrients[:3]])
+            health_context_parts.append(f"{lacking} 보충이 필요해 보여요.")
+        if diseases:
+            disease_text = ", ".join(diseases)
+            health_context_parts.append(f"{disease_text} 관리 중이라 자극적이지 않은 메뉴를 추천드리고 싶어요.")
+        health_context_text = " ".join(health_context_parts).strip()
+        
+        request_text_clean = (request.user_request or "").strip()
+        detected_meal_type = request.meal_type or detect_meal_type_from_text(request_text_clean)
+        combined_user_intent = build_user_intent_text(request.user_request, request.conversation_history)
+        
         # 음식 관련이 아닌 요청인지 확인
         user_request_lower = (request.user_request or "").lower()
         non_food_keywords = ["날씨", "시간", "날짜", "계산", "수학", "게임", "영화", "음악", "책", "여행"]
@@ -233,10 +310,14 @@ async def get_recipe_recommendations(
             return ApiResponse(
                 success=True,
                 data=RecipeRecommendationResponse(
-                    inferred_preference="음식 관련이 아닌 요청",
-                    health_warning=None,
-                    user_friendly_message=gentle_message,
-                    recommendations=[]  # 레시피 추천 없음
+                    response_id=f"recipe-{uuid.uuid4()}",
+                    action_type="TEXT_ONLY",
+                    message=gentle_message,
+                    data=RecipeRecommendationData(
+                        inferred_preference="음식 관련이 아닌 요청",
+                        user_friendly_message=gentle_message
+                    ),
+                    suggestions=["샐러드 추천해줘", "저녁 메뉴 알려줘"]
                 ),
                 message="✅ 음식 관련 안내 메시지"
             )
@@ -270,35 +351,147 @@ async def get_recipe_recommendations(
             return ApiResponse(
                 success=True,
                 data=RecipeRecommendationResponse(
-                    inferred_preference="오늘 충분히 섭취하여 추가 섭취 자제 권장",
-                    health_warning=None,
-                    user_friendly_message=alert_message,
-                    recommendations=[]  # 레시피 추천 없음 - 사용자가 다시 요청하면 그때 추천
+                    response_id=f"recipe-{uuid.uuid4()}",
+                    action_type="TEXT_ONLY",
+                    message=alert_message,
+                    data=RecipeRecommendationData(
+                        inferred_preference="오늘 충분히 섭취하여 추가 섭취 자제 권장",
+                        user_friendly_message=alert_message
+                    ),
+                    suggestions=["그래도 추천해줘", "내일 다시 추천받을게"]
                 ),
                 message="✅ 건강을 위한 자제 권장 메시지"
             )
         
-        # 5. 레시피 추천 서비스 호출 (칼로리/나트륨 초과가 아닌 경우에만)
+        recipe_service = get_recipe_recommendation_service()
+        print(f"[Recommend] Phase-0 user={user_id} Clarification pipeline 시작")
+        decision = await recipe_service.decide_recipe_tool(
+            user=user,
+            user_request=request.user_request or "",
+            health_context=health_context_text,
+            conversation_history=request.conversation_history
+        )
+        decision_meal_type = decision.get("meal_type")
+        call_tool = bool(decision.get("call_tool"))
+        assistant_reply = decision.get("assistant_reply") or "조금 더 자세히 말씀해주시면 레시피를 준비해드릴게요!"
+        decision_suggestions = decision.get("suggestions") or []
+        if not call_tool:
+            suggestions = decision_suggestions or [
+                "자세히 알려줄게",
+                "다른 재료 말해줄게"
+            ]
+            return ApiResponse(
+                success=True,
+                data=RecipeRecommendationResponse(
+                    response_id=f"recipe-{uuid.uuid4()}",
+                    action_type="TEXT_ONLY",
+                    message=assistant_reply,
+                    data=None,
+                    suggestions=suggestions
+                ),
+                message="✅ 대화형 안내 메시지"
+            )
+        
+        combined_meal_type = decision_meal_type or detected_meal_type
+        if not combined_meal_type:
+            confirmation_message = (
+                f"{assistant_reply}\n\n"
+                "어느 끼니에 드실 계획인지 알려주시면 맞춤 레시피를 바로 추천해드릴게요!"
+            )
+            suggestions = decision_suggestions or [
+                "아침으로 먹을래",
+                "점심으로 부탁해",
+                "저녁 레시피 궁금해",
+                "간식으로 먹을래"
+            ]
+            return ApiResponse(
+                success=True,
+                data=RecipeRecommendationResponse(
+                    response_id=f"recipe-{uuid.uuid4()}",
+                    action_type="CONFIRMATION",
+                    message=confirmation_message,
+                    data=None,
+                    suggestions=suggestions
+                ),
+                message="✅ 식사 유형 확인 필요"
+            )
+        
+        # 6. 레시피 추천 서비스 호출 (칼로리/나트륨 초과가 아닌 경우에만)
         recipe_service = get_recipe_recommendation_service()
         result_data = await recipe_service.get_recipe_recommendations(
             user=user,
-            user_request=request.user_request,
+            user_request=request.user_request or "",
+            llm_user_intent=combined_user_intent,
             conversation_history=request.conversation_history,
             diseases=diseases if diseases else None,
             allergies=allergies if allergies else None,
             user_nickname=user.nickname or user.username,
             has_eaten_today=has_eaten_today,
             deficient_nutrients=deficient_nutrients if deficient_nutrients else None,
-            meal_type=request.meal_type,  # ✨ 식사 유형 전달
+            meal_type=combined_meal_type,
             excess_warnings=excess_warnings  # ✨ 초과 경고 전달
         )
         
-        print(f"✅ 레시피 추천 완료: {len(result_data.get('recommendations', []))}개")
+        print(f"[Recommend] Phase-1 카드 추천 완료 user={user_id}, count={len(result_data.get('recommendations', []))}")
         
-        # 6. 응답 반환
+        health_warning_text = result_data.get("health_warning")
+        if health_warning_text:
+            confirmation = await recipe_service.evaluate_health_warning(
+                user=user,
+                user_request=combined_user_intent,
+                health_warning=health_warning_text,
+                conversation_history=request.conversation_history
+            )
+            if confirmation.get("requires_confirmation"):
+                confirm_message = confirmation.get("assistant_reply") or (
+                    f"{health_warning_text}\n\n정말 그대로 진행할까요?"
+                )
+                confirm_suggestions = confirmation.get("suggestions") or [
+                    "그래도 진행할래",
+                    "다른 메뉴 추천해줘"
+                ]
+                return ApiResponse(
+                    success=True,
+                    data=RecipeRecommendationResponse(
+                        response_id=f"recipe-{uuid.uuid4()}",
+                        action_type="TEXT_ONLY",
+                        message=confirm_message,
+                        data=None,
+                        suggestions=confirm_suggestions
+                    ),
+                    message="⚠️ 건강 경고 확인 필요"
+                )
+        
+        recipes = [
+            RecipeRecommendation(**rec) for rec in result_data.get("recommendations", [])
+        ] if result_data.get("recommendations") else []
+        response_message = result_data.get("user_friendly_message") or "원하시는 레시피를 아래에서 선택해주세요!"
+        response_data = RecipeRecommendationData(
+            recipes=recipes or None,
+            inferred_preference=result_data.get("inferred_preference"),
+            health_warning=result_data.get("health_warning"),
+            user_friendly_message=result_data.get("user_friendly_message")
+        )
+        result_suggestions = await recipe_service.generate_action_suggestions(
+            action_type="RECOMMENDATION_RESULT",
+            user_request=combined_user_intent,
+            meal_type=combined_meal_type,
+            recommendations=result_data.get("recommendations"),
+            deficient_nutrients=deficient_nutrients if deficient_nutrients else None,
+            diseases=diseases if diseases else None,
+            assistant_message=response_message
+        )
+        suggestions = result_suggestions or ["다른 메뉴도 추천해줘", "다른 식사로 바꿀래"]
+        
         return ApiResponse(
             success=True,
-            data=RecipeRecommendationResponse(**result_data),
+            data=RecipeRecommendationResponse(
+                response_id=f"recipe-{uuid.uuid4()}",
+                action_type="RECOMMENDATION_RESULT",
+                message=response_message,
+                data=response_data,
+                suggestions=suggestions
+            ),
             message="✅ 레시피 추천이 완료되었습니다."
         )
     
@@ -368,6 +561,108 @@ async def get_recipe_detail(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"레시피 상세 조회 중 오류가 발생했습니다: {str(e)}"
         )
+
+
+@router.post("/ingredient-check", response_model=ApiResponse[IngredientCheckResponse])
+async def ingredient_check(
+    request: IngredientCheckRequest,
+    user_id: int,
+    session: AsyncSession = Depends(get_session)
+):
+    """레시피 재료 확인용 빠른 조회"""
+    result = await session.execute(select(User).where(User.user_id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="사용자를 찾을 수 없습니다.")
+    recipe_service = get_recipe_recommendation_service()
+    print(f"[Recommend] Phase-INGREDIENT_CHECK start user={user_id}, recipe={request.recipe_name}")
+    ingredient_list = await recipe_service.get_ingredient_check(request.recipe_name)
+    normalized = [item for item in ingredient_list if item.get("name") or item.get("amount")]
+    formatted = [
+        (f"{item.get('name', '').strip()} {item.get('amount', '').strip()}").strip()
+        for item in normalized
+    ]
+    print(f"[Recommend] Phase-INGREDIENT_CHECK done user={user_id}, count={len(formatted)}")
+    return ApiResponse(
+        success=True,
+        data=IngredientCheckResponse(
+            response_id=f"recipe-{uuid.uuid4()}",
+            action_type=RecipeActionType.INGREDIENT_CHECK,
+            recipe_name=request.recipe_name,
+            ingredients=formatted
+        ),
+        message="✅ 필요한 재료를 확인했습니다."
+    )
+
+
+@router.post("/custom-recipe", response_model=ApiResponse[CustomRecipeResponse])
+async def generate_custom_recipe(
+    request: CustomRecipeRequest,
+    user_id: int,
+    session: AsyncSession = Depends(get_session)
+):
+    """재료 제외 정보를 반영한 맞춤 조리법 생성"""
+    result = await session.execute(select(User).where(User.user_id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="사용자를 찾을 수 없습니다.")
+    recipe_service = get_recipe_recommendation_service()
+    print(f"[Recommend] Phase-COOKING_STEPS start user={user_id}, recipe={request.recipe_name}, excluded={len(request.excluded_ingredients)}")
+    custom_result = await recipe_service.generate_custom_cooking_steps(
+        user=user,
+        recipe_name=request.recipe_name,
+        excluded_ingredients=request.excluded_ingredients,
+        allowed_ingredients=request.available_ingredients,
+        meal_type=request.meal_type
+    )
+    ingredient_models = [
+        RecipeIngredient(name=ing.get("name", "재료"), amount=ing.get("amount", "적당량"))
+        for ing in custom_result.get("ingredients", [])
+    ]
+    step_models = [
+        RecipeStep(
+            step_number=int(step.get("step_number") or idx + 1),
+            title=step.get("title") or f"단계 {idx + 1}",
+            description=step.get("description") or "",
+            tip=step.get("tip")
+        )
+        for idx, step in enumerate(custom_result.get("steps") or [])
+    ]
+    nutrition_payload = custom_result.get("nutrition_info") or {}
+    def _extract_int(value: Any) -> int:
+        if value is None:
+            return 0
+        text = str(value).lower().replace("kcal", "").strip()
+        try:
+            return int(float(text))
+        except ValueError:
+            return 0
+
+    nutrition_info = NutritionInfo(
+        calories=_extract_int(nutrition_payload.get("calories")),
+        protein=str(nutrition_payload.get("protein") or "0g"),
+        carbs=str(nutrition_payload.get("carbs") or "0g"),
+        fat=str(nutrition_payload.get("fat") or "0g"),
+        fiber=nutrition_payload.get("fiber"),
+        sodium=nutrition_payload.get("sodium")
+    )
+    response = CustomRecipeResponse(
+        response_id=f"recipe-{uuid.uuid4()}",
+        recipe_name=request.recipe_name,
+        action_type=RecipeActionType.COOKING_STEPS,
+        ingredients=ingredient_models,
+        instructions_markdown=custom_result.get("instructions_markdown", ""),
+        steps=step_models,
+        nutrition_info=nutrition_info,
+        estimated_time=custom_result.get("estimated_time"),
+        intro=custom_result.get("intro")
+    )
+    print(f"[Recommend] Phase-COOKING_STEPS done user={user_id}, steps={len(step_models)}")
+    return ApiResponse(
+        success=True,
+        data=response,
+        message="✅ 맞춤 조리법을 생성했습니다."
+    )
 
 
 @router.post("/save", response_model=ApiResponse[dict])
@@ -630,5 +925,3 @@ async def save_recipe_as_meal(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"레시피 저장 중 오류가 발생했습니다: {str(e)}"
         )
-
-

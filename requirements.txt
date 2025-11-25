@@ -9,7 +9,7 @@ asyncmy==0.2.9
 alembic==1.13.3
 
 # Configuration & Security
-pydantic-settings==2.3.4
+pydantic-settings>=2.4.0,<3.0.0
 pydantic[email]==2.9.2
 python-dotenv==1.0.1
 passlib[bcrypt]==1.7.4
@@ -29,6 +29,10 @@ pillow==10.4.0
 
 # AI/ML - OpenAI GPT-Vision
 openai==1.54.3
+langchain>=0.3.4,<0.4.0
+langchain-openai>=0.2.2,<0.3.0
+langchain-community>=0.3.4,<0.4.0
+
 
 # Testing
 pytest==8.3.3
@@ -43,4 +47,3 @@ ruff==0.6.9
 # Optional: Redis for distributed session storage
 # redis==5.0.1
 # aioredis==2.0.1
-

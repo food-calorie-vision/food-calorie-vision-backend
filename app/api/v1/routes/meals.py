@@ -1,15 +1,18 @@
 """음식 기록 및 건강 점수 관리 API"""
-import os
 from datetime import datetime, date, timedelta
+from functools import lru_cache
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from langchain.schema import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field
 
 from app.api.v1.schemas.common import ApiResponse
 from app.api.dependencies import require_authentication
+from app.core.config import get_settings
 from app.db.models import UserFoodHistory, HealthScore, User, Food, UserIngredient
 from app.db.models_food_nutrients import FoodNutrient
 from app.db.models_user_contributed import UserContributedFood
@@ -22,6 +25,18 @@ from app.services.health_score_service import (
 )
 
 router = APIRouter()
+settings = get_settings()
+
+
+@lru_cache
+def get_nutrition_llm() -> ChatOpenAI:
+    if not settings.openai_api_key:
+        raise ValueError("OPENAI_API_KEY 환경 변수가 필요합니다.")
+    return ChatOpenAI(
+        api_key=settings.openai_api_key,
+        model="gpt-4o-mini",
+        temperature=0.3,
+    )
 
 
 # ========== Request/Response 스키마 ==========
@@ -506,14 +521,8 @@ async def save_recommended_meal(
         print(f"🤖 STEP 2: GPT로 {request.food_name}의 영양소 추론")
         
         try:
-            from openai import OpenAI
-            
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                raise ValueError("OPENAI_API_KEY 환경 변수가 설정되지 않았습니다.")
-            
-            client = OpenAI(api_key=api_key)
-            
+            llm = get_nutrition_llm()
+                        
             prompt = f"""당신은 영양학 전문가입니다. 다음 음식의 영양 정보를 JSON 형식으로 추정해주세요.
 
 음식: {request.food_name}
@@ -541,18 +550,14 @@ async def save_recommended_meal(
 **중요:** 반드시 JSON 형식만 반환하고, 다른 설명은 포함하지 마세요.
 영양소가 미미하거나 없으면 0으로 표시하세요."""
 
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are a nutrition expert. Always respond in valid JSON format only."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=500
-            )
+            messages = [
+                SystemMessage(content="You are a nutrition expert. Always respond in valid JSON format only."),
+                HumanMessage(content=prompt)
+            ]
             
             import json
-            nutrition_data = json.loads(response.choices[0].message.content)
+            response = await llm.ainvoke(messages)
+            nutrition_data = json.loads(response.content)
             print(f"  ✅ 영양소 추론 완료: {nutrition_data['calories']}kcal")
             
         except Exception as e:

@@ -3,7 +3,9 @@ import base64
 import io
 from typing import Optional, List
 
-from openai import OpenAI
+from langchain_openai import ChatOpenAI
+from langchain.schema import HumanMessage
+from openai import AsyncOpenAI
 from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,20 +20,29 @@ class GPTVisionService:
     """GPT-Vision 음식 분석 서비스"""
     
     def __init__(self):
-        self.client: Optional[OpenAI] = None
+        self.llm: Optional[ChatOpenAI] = None
+        self.client: Optional[AsyncOpenAI] = None
         self._initialize_client()
     
     def _initialize_client(self):
         """OpenAI 클라이언트 초기화"""
         if settings.openai_api_key:
             try:
-                self.client = OpenAI(api_key=settings.openai_api_key)
+                self.llm = ChatOpenAI(
+                    api_key=settings.openai_api_key,
+                    model="gpt-4o",
+                    temperature=0.7,
+                    max_tokens=1500,
+                )
+                self.client = AsyncOpenAI(api_key=settings.openai_api_key)
                 print("✅ OpenAI GPT-Vision 클라이언트 초기화 완료!")
             except Exception as e:
                 print(f"❌ OpenAI 클라이언트 초기화 실패: {e}")
+                self.llm = None
                 self.client = None
         else:
             print("⚠️ OPENAI_API_KEY가 설정되지 않았습니다.")
+            self.llm = None
             self.client = None
     
     def _image_to_base64(self, image_bytes: bytes) -> str:
@@ -76,7 +87,7 @@ class GPTVisionService:
                 ]
             }
         """
-        if self.client is None:
+        if self.llm is None:
             raise RuntimeError("OpenAI 클라이언트가 초기화되지 않았습니다. OPENAI_API_KEY를 확인하세요.")
         
         try:
@@ -91,32 +102,20 @@ class GPTVisionService:
             prompt = self._build_analysis_prompt(detected_objects_summary, detected_objects_list)
             
             # GPT-Vision API 호출
-            response = self.client.chat.completions.create(
-                model="gpt-4o",  # 또는 "gpt-4-vision-preview"
-                messages=[
+            message = HumanMessage(
+                content=[
+                    {"type": "text", "text": prompt},
                     {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": prompt
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{base64_image}",
-                                    "detail": "high"
-                                }
-                            }
-                        ]
-                    }
-                ],
-                max_tokens=1500,
-                temperature=0.7
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{base64_image}",
+                            "detail": "high",
+                        },
+                    },
+                ]
             )
-            
-            # 응답 파싱
-            gpt_response = response.choices[0].message.content
+            response = self.llm.invoke([message])
+            gpt_response = response.content
             
             # 디버깅: GPT 원본 응답 출력
             print("=" * 80)
@@ -580,7 +579,7 @@ class GPTVisionService:
 이미지를 인식할 수 없습니다. (이미지가 흐릿하거나, 음식이 명확하지 않음)
 """
         
-        response = self.client.chat.completions.create(
+        response = await self.client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {
@@ -681,7 +680,7 @@ class GPTVisionService:
 이유: 이미지에 둥근 도우 위에 토마토 소스, 치즈, 페퍼로니 토핑이 올려진 피자가 보입니다.
 """
         
-        response = self.client.chat.completions.create(
+        response = await self.client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {
@@ -890,7 +889,7 @@ class GPTVisionService:
 - 치즈 양을 줄이면 칼로리를 낮출 수 있습니다.
 """
         
-        response = self.client.chat.completions.create(
+        response = await self.client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {
@@ -1007,7 +1006,7 @@ class GPTVisionService:
         
         return result
     
-    def analyze_ingredient_image(self, image_bytes: bytes, roboflow_hint: str = "") -> str:
+    async def analyze_ingredient_image(self, image_bytes: bytes, roboflow_hint: str = "") -> str:
         """
         크롭된 식재료 이미지를 GPT Vision으로 분석
         
@@ -1038,7 +1037,7 @@ class GPTVisionService:
 
 답변:"""
             
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {
@@ -1068,7 +1067,7 @@ class GPTVisionService:
             print(f"❌ GPT Vision 분석 실패: {e}")
             return roboflow_hint if roboflow_hint else "알 수 없음"
     
-    def analyze_ingredients_with_boxes(
+    async def analyze_ingredients_with_boxes(
         self, 
         image_with_boxes_bytes: bytes, 
         num_objects: int,
@@ -1134,7 +1133,7 @@ class GPTVisionService:
 
 답변:"""
             
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {
@@ -1207,4 +1206,3 @@ def get_gpt_vision_service() -> GPTVisionService:
     if _gpt_vision_service_instance is None:
         _gpt_vision_service_instance = GPTVisionService()
     return _gpt_vision_service_instance
-
