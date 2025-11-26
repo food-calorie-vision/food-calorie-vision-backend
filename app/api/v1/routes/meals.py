@@ -469,6 +469,14 @@ async def save_recommended_meal(
         저장된 음식 기록 + NRF9.3 점수
     """
     try:
+        # ========== STEP 0: 음식명 정규화 ==========
+        from app.services.food_matching_service import normalize_food_name
+        
+        normalized_food_name = normalize_food_name(request.food_name, request.ingredients_used)
+        if normalized_food_name != request.food_name:
+            print(f"🔄 음식명 정규화: '{request.food_name}' → '{normalized_food_name}'")
+            request.food_name = normalized_food_name
+        
         # ========== STEP 1: 식재료 사용 처리 ==========
         # ingredients_with_quantity 우선, 없으면 레거시 방식
         missing_ingredients = []
@@ -1169,14 +1177,35 @@ async def get_most_eaten_foods(
         print(f"🍽️ 자주 먹은 음식 조회: user_id={user_id}, limit={limit}")
         
         # food_id별 카운트 쿼리
-        stmt = (
+        # 같은 food_id는 하나로 합치고, 가장 최근 음식명 사용
+        # Subquery: 각 food_id의 가장 최근 기록 찾기
+        latest_food_subquery = (
             select(
                 UserFoodHistory.food_id,
                 UserFoodHistory.food_name,
-                func.count(UserFoodHistory.history_id).label('eat_count')
+                func.row_number().over(
+                    partition_by=UserFoodHistory.food_id,
+                    order_by=UserFoodHistory.consumed_at.desc()
+                ).label('rn')
             )
             .where(UserFoodHistory.user_id == user_id)
-            .group_by(UserFoodHistory.food_id, UserFoodHistory.food_name)
+            .subquery()
+        )
+        
+        # 메인 쿼리: food_id별 카운트 + 최근 음식명 조인
+        stmt = (
+            select(
+                UserFoodHistory.food_id,
+                latest_food_subquery.c.food_name,  # 가장 최근 음식명
+                func.count(UserFoodHistory.history_id).label('eat_count')
+            )
+            .join(
+                latest_food_subquery,
+                (UserFoodHistory.food_id == latest_food_subquery.c.food_id) &
+                (latest_food_subquery.c.rn == 1)
+            )
+            .where(UserFoodHistory.user_id == user_id)
+            .group_by(UserFoodHistory.food_id, latest_food_subquery.c.food_name)
             .order_by(func.count(UserFoodHistory.history_id).desc())
             .limit(limit)
         )

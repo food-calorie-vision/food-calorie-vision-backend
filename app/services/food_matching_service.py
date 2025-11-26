@@ -4,12 +4,73 @@ from sqlalchemy import select, or_, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from langchain_openai import ChatOpenAI
 from langchain.schema import SystemMessage, HumanMessage
+import re
 
 from app.db.models_food_nutrients import FoodNutrient
 from app.db.models_user_contributed import UserContributedFood
 from app.core.config import get_settings
 
 settings = get_settings()
+
+
+def normalize_food_name(food_name: str, ingredients: List[str] = None) -> str:
+    """
+    음식명을 정규화하여 재료 순서가 달라도 같은 이름으로 만듦
+    
+    예시:
+    - "양배추 사과 샐러드" → "사과 양배추 샐러드"
+    - "사과 양배추 샐러드" → "사과 양배추 샐러드"
+    
+    Args:
+        food_name: 원본 음식명
+        ingredients: 재료 리스트 (옵션)
+        
+    Returns:
+        정규화된 음식명
+    """
+    if not food_name:
+        return food_name
+    
+    # 음식 타입 키워드 (샐러드, 볶음 등)
+    food_type_keywords = [
+        "샐러드", "볶음", "구이", "찜", "조림", "튀김",
+        "국", "탕", "찌개", "전골", "스튜", "수프",
+        "김밥", "밥", "덮밥", "비빔밥", "볶음밥",
+        "면", "국수", "파스타", "라면", "우동", "소바",
+        "빵", "케이크", "쿠키", "파이", "머핀",
+        "스테이크", "커틀릿", "돈까스", "치킨",
+        "피자", "버거", "샌드위치", "토스트",
+        "스무디", "주스", "차", "음료"
+    ]
+    
+    # 음식 타입 추출
+    food_type = None
+    for keyword in food_type_keywords:
+        if keyword in food_name:
+            food_type = keyword
+            break
+    
+    if not food_type:
+        # 음식 타입이 없으면 그대로 반환
+        return food_name
+    
+    # 음식명에서 음식 타입을 제외한 재료 부분 추출
+    ingredients_part = food_name.replace(food_type, "").strip()
+    
+    # 재료를 공백으로 분리하고 정렬
+    ingredient_tokens = re.split(r'[\s,]+', ingredients_part)
+    ingredient_tokens = [token.strip() for token in ingredient_tokens if token.strip()]
+    
+    if not ingredient_tokens:
+        return food_name
+    
+    # 재료를 알파벳순으로 정렬
+    ingredient_tokens.sort()
+    
+    # 정규화된 음식명 생성
+    normalized_name = " ".join(ingredient_tokens) + " " + food_type
+    
+    return normalized_name
 
 
 class FoodMatchingService:
@@ -245,11 +306,14 @@ class FoodMatchingService:
                 best_match = food
         
         # 최소 점수 기준 (너무 낮으면 매칭 안함)
-        if best_score >= 20:
+        MINIMUM_SCORE = 60  # 신뢰도 기준 상향 (20점 → 60점)
+        
+        if best_score >= MINIMUM_SCORE:
             print(f"  ✅ 최고 점수: {best_score}점 ({best_match.nutrient_name})")
             return best_match
         
-        print(f"  ⚠️ 최고 점수 {best_score}점으로 기준 미달 (최소 20점 필요)")
+        print(f"  ⚠️ 최고 점수 {best_score}점으로 기준 미달 (최소 {MINIMUM_SCORE}점 필요)")
+        print(f"  ⚠️ 매칭 신뢰도가 낮아 user_contributed_foods에 저장 권장")
         return None
     
     def _clean_food_name(self, food_name: str) -> str:

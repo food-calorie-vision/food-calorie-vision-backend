@@ -334,7 +334,7 @@ async def calculate_nrf93_score(
     base_score = protein_points + fiber_points
     
     # 추가 영양소 점수 (나머지 7개: 비타민A, C, E, 칼슘, 철분, 칼륨, 마그네슘)
-    # 건강 식단 보너스: 최대 30점
+    # 샐러드, 채소 중심 식단에 유리하도록 비중 증가
     other_nutrients = positive_nutrients[2:]
     available_other = [n for n in other_nutrients if n > 0]
     
@@ -343,14 +343,15 @@ async def calculate_nrf93_score(
         other_avg = sum(available_other) / len(available_other)
         # 전체 7개 중 몇 개가 있는지에 따라 가중치 조정
         other_weight = len(available_other) / 7.0  # 0~1
-        # 추가 영양소는 최대 30점 보너스
-        other_score = min(30, other_avg * other_weight * 0.3)
+        # 추가 영양소는 최대 50점 (기존 30점 → 50점으로 증가)
+        # 샐러드처럼 비타민/미네랄이 풍부한 음식에 더 높은 점수
+        other_score = min(50, other_avg * other_weight * 0.5)
     else:
         # 추가 영양소가 없어도 기본 점수만으로도 충분히 높은 점수 가능
         other_score = 0
     
-    # 전체 긍정 점수 (기본 영양소 + 추가 영양소 보너스)
-    # base_score는 0~100점, other_score는 최대 30점 보너스 (캡 100점)
+    # 전체 긍정 점수 (기본 영양소 + 추가 영양소)
+    # base_score는 0~100점, other_score는 최대 50점 (총합 캡 100점)
     positive_score = min(100, base_score + other_score)
     
     # 제한 영양소 점수 계산 (낮을수록 좋음)
@@ -368,24 +369,37 @@ async def calculate_nrf93_score(
     raw_score = positive_score - (negative_score * 0.15)
     
     # 점수 범위를 0~100으로 정규화
-    # 건강 식단이라면 최소 70점 보장 (기본 영양소가 충분하면)
-    if base_score >= 50:  # 기본 영양소가 충분하면 (단백질+식이섬유 합계 50점 이상)
-        final_score = max(70, min(100, raw_score))
-    elif base_score >= 30:  # 기본 영양소가 적당하면
-        final_score = max(60, min(100, raw_score))
-    elif base_score > 0:  # 기본 영양소가 조금이라도 있으면
-        final_score = max(50, min(100, raw_score))
-    else:
-        final_score = max(0, min(100, raw_score))
+    # 채소/과일 중심 식단(비타민 풍부)과 단백질 중심 식단 모두 고려
     
-    # 건강 식단 보너스: 단백질과 식이섬유가 모두 충분하면 추가 보너스
-    if protein_score >= 20 and fiber_score >= 10:  # 건강 식단 기준
-        # 건강 식단 보너스: 최대 20점
-        health_bonus = min(20, (protein_score + fiber_score) / 3)
-        final_score = min(100, final_score + health_bonus)
-    elif protein_score >= 15:  # 단백질이 충분하면
-        bonus = min(15, protein_score / 2)  # 최대 15점 보너스
-        final_score = min(100, final_score + bonus)
+    # 비타민/미네랄 보너스 계산 (샐러드, 과일 등에 유리)
+    vitamin_minerals = [positive_nutrients[2], positive_nutrients[3], positive_nutrients[4],  # 비타민 A, C, E
+                        positive_nutrients[5], positive_nutrients[6], positive_nutrients[7], positive_nutrients[8]]  # 칼슘, 철분, 칼륨, 마그네슘
+    available_vitamins = [v for v in vitamin_minerals if v > 0]
+    
+    vitamin_bonus = 0
+    if available_vitamins:
+        vitamin_avg = sum(available_vitamins) / len(available_vitamins)
+        # 비타민/미네랄이 풍부하면 최대 30점 보너스 (추천 음식 우대)
+        vitamin_bonus = min(30, vitamin_avg * len(available_vitamins) / 7.0 * 0.35)
+    
+    # 건강 식단이라면 최소 점수 보장 (추천 음식 = 최소 80점)
+    if base_score >= 50:  # 단백질+식이섬유가 충분 (고단백 식단)
+        final_score = max(80, min(100, raw_score + vitamin_bonus))
+    elif base_score >= 30:  # 적당함
+        final_score = max(70, min(100, raw_score + vitamin_bonus))
+    elif fiber_score >= 20 or len(available_vitamins) >= 4:  # 식이섬유 풍부 또는 비타민 4개 이상 (채소/과일 중심)
+        final_score = max(80, min(100, raw_score + vitamin_bonus))  # 샐러드/과일 = 최소 80점
+    elif fiber_score >= 15 or len(available_vitamins) >= 3:  # 적당한 채소/과일
+        final_score = max(75, min(100, raw_score + vitamin_bonus))
+    elif base_score > 0:  # 기본 영양소 조금이라도 있으면
+        final_score = max(60, min(100, raw_score + vitamin_bonus))
+    else:
+        final_score = max(0, min(100, raw_score + vitamin_bonus))
+    
+    # 단백질 중심 식단 보너스 (닭가슴살, 생선 등)
+    if protein_score >= 30:
+        protein_bonus = min(20, protein_score / 2.5)
+        final_score = min(100, final_score + protein_bonus)
     
     # 최종 점수는 0~100 범위로 제한
     final_score = max(0, min(100, final_score))
