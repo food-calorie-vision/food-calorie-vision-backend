@@ -5,7 +5,7 @@ from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import User
+from app.db.models import User, DiseaseAllergyProfile
 
 # 비밀번호 해싱
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -53,6 +53,8 @@ async def create_user(
     age: int | None = None,
     weight: float | None = None,
     health_goal: str = "maintain",
+    allergies: str | None = None,
+    diseases: str | None = None,
 ) -> User:
     """
     새 사용자 생성 (user_id는 자동생성)
@@ -67,6 +69,8 @@ async def create_user(
         age: 나이
         weight: 체중
         health_goal: 건강 목표 ('gain', 'maintain', 'loss')
+        allergies: 알레르기 정보 (콤마로 구분된 문자열)
+        diseases: 기저질환 정보 (콤마로 구분된 문자열)
     
     Returns:
         생성된 User 객체
@@ -98,6 +102,22 @@ async def create_user(
 
     session.add(user)
     await session.flush()  # user_id 생성을 위해 flush
+
+    user_id = user.user_id
+
+    # 알레르기 정보 처리
+    if allergies:
+        allergy_list = [a.strip() for a in allergies.split(',') if a.strip()]
+        for allergy_name in allergy_list:
+            profile = DiseaseAllergyProfile(user_id=user_id, allergy_name=allergy_name)
+            session.add(profile)
+            
+    # 질환 정보 처리 (알레르기와 동일한 방식)
+    if diseases:
+        disease_list = [d.strip() for d in diseases.split(',') if d.strip()]
+        for disease_name in disease_list:
+            profile = DiseaseAllergyProfile(user_id=user_id, disease_name=disease_name)
+            session.add(profile)
 
     return user
 

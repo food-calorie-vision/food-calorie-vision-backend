@@ -1,6 +1,7 @@
 """인증 관련 라우트 (세션 기반) - ERDCloud 스키마 기반"""
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+import re
 
 from app.api.v1.schemas.auth import (
     LoginRequest,
@@ -10,6 +11,7 @@ from app.api.v1.schemas.auth import (
     SignupRequest,
     SignupResponse,
     UserInfoResponse,
+    EmailAvailabilityResponse,
 )
 from app.db.session import get_session
 from app.services import auth_service
@@ -49,6 +51,8 @@ async def signup(
             age=signup_data.age,
             weight=signup_data.weight,
             health_goal=signup_data.health_goal,
+            allergies=signup_data.allergies,
+            diseases=signup_data.diseases,
         )
 
         # 커밋
@@ -66,6 +70,27 @@ async def signup(
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=500, detail=f"회원가입 중 오류가 발생했습니다: {str(e)}")
+
+
+@router.get("/check-email", response_model=EmailAvailabilityResponse)
+async def check_email_availability(
+    email: str = Query(..., description="확인할 이메일 주소"),
+    session: AsyncSession = Depends(get_session),
+) -> EmailAvailabilityResponse:
+    """
+    이메일 중복 확인
+    """
+    # 이메일 형식 유효성 검사 (기본적인 패턴)
+    if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
+        return EmailAvailabilityResponse(available=False, message="유효하지 않은 이메일 형식입니다.")
+
+    # 데이터베이스에서 이메일 조회
+    user = await auth_service.get_user_by_email(session, email)
+
+    if user:
+        return EmailAvailabilityResponse(available=False, message="이미 사용 중인 이메일입니다.")
+    else:
+        return EmailAvailabilityResponse(available=True, message="사용 가능한 이메일입니다.")
 
 
 @router.post("/login", response_model=LoginResponse)
