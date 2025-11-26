@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import asyncio
 from logging.config import fileConfig
+import os # 추가
+import sys # 추가
 
 from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+
+# 프로젝트 루트 디렉토리를 sys.path에 추가 (ModuleNotFoundError 해결용)
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app.core.config import get_settings
 from app.db import base  # noqa: F401 - ensures models are registered
