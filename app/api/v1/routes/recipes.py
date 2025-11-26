@@ -665,6 +665,17 @@ async def generate_custom_recipe(
     )
 
 
+def _parse_nutrient_value(value: Any, unit: str = "") -> float:
+    """영양소 문자열 (예: '120kcal', '10g', '200mg')을 float으로 파싱합니다."""
+    if value is None:
+        return 0.0
+    text = str(value).lower().replace(unit.lower(), "").strip()
+    try:
+        return float(text)
+    except ValueError:
+        return 0.0
+
+
 @router.post("/save", response_model=ApiResponse[dict])
 async def save_recipe_as_meal(
     save_request: SaveRecipeRequest,
@@ -701,12 +712,12 @@ async def save_recipe_as_meal(
         print(f"💾 레시피 '{save_request.recipe_name}' 식단 기록 저장 시작...")
         
         # 영양소 값 파싱
-        calories = float(save_request.nutrition_info.calories)
-        protein_g = float(save_request.nutrition_info.protein.replace('g', '').replace('G', ''))
-        fat_g = float(save_request.nutrition_info.fat.replace('g', '').replace('G', ''))
-        carbs_g = float(save_request.nutrition_info.carbs.replace('g', '').replace('G', ''))
-        fiber_g = float(save_request.nutrition_info.fiber.replace('g', '').replace('G', '')) if save_request.nutrition_info.fiber else 0.0
-        sodium_mg = float(save_request.nutrition_info.sodium.replace('mg', '').replace('MG', '')) if save_request.nutrition_info.sodium else 0.0
+        calories = _parse_nutrient_value(save_request.nutrition_info.calories, "kcal")
+        protein_g = _parse_nutrient_value(save_request.nutrition_info.protein, "g")
+        fat_g = _parse_nutrient_value(save_request.nutrition_info.fat, "g")
+        carbs_g = _parse_nutrient_value(save_request.nutrition_info.carbs, "g")
+        fiber_g = _parse_nutrient_value(save_request.nutrition_info.fiber, "g")
+        sodium_mg = _parse_nutrient_value(save_request.nutrition_info.sodium, "mg")
         
         # 인분 비율 적용
         actual_calories = calories * save_request.actual_servings
