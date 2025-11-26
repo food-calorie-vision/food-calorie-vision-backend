@@ -15,6 +15,7 @@ from app.api.v1.schemas.auth import (
 )
 from app.db.session import get_session
 from app.services import auth_service
+from app.services.user_context_cache import refresh_user_context, invalidate_user_context
 from app.utils.session import (
     get_current_user_id,
     get_session_remaining_time,
@@ -146,7 +147,10 @@ async def logout(request: Request) -> LogoutResponse:
     if not is_authenticated(request):
         raise HTTPException(status_code=401, detail="로그인되어 있지 않습니다.")
 
+    user_id = get_current_user_id(request)
     logout_user(request)
+    if user_id:
+        invalidate_user_context(user_id)
 
     return LogoutResponse(
         success=True,

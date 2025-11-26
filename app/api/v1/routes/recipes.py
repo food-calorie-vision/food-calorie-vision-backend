@@ -1,5 +1,5 @@
 """레시피 추천 API 라우트"""
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 from datetime import datetime, date
@@ -27,7 +27,7 @@ from app.db.models import User, Food, UserFoodHistory, HealthScore, DiseaseAller
 from app.db.models_food_nutrients import FoodNutrient
 from app.db.models_user_contributed import UserContributedFood
 from app.db.session import get_session
-from app.utils.session import get_current_user_id, is_authenticated
+from app.api.dependencies import get_current_active_user, require_authentication
 from app.services.recipe_recommendation_service import get_recipe_recommendation_service
 from app.services.health_score_service import calculate_nrf93_score
 import uuid
@@ -85,7 +85,7 @@ def build_user_intent_text(
 @router.post("/recommendations", response_model=ApiResponse[RecipeRecommendationResponse])
 async def get_recipe_recommendations(
     request: RecipeRecommendationRequest,
-    user_id: int,  # TODO: 실제로는 세션에서 가져와야 함
+    current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_session)
 ):
     """
@@ -93,23 +93,19 @@ async def get_recipe_recommendations(
     
     **Args:**
         - request: 사용자 요청 (선택사항: 요청사항, 대화 히스토리)
-        - user_id: 사용자 ID (현재는 쿼리 파라미터, 추후 세션에서 가져옴)
         - session: DB 세션
     
     **Returns:**
         ApiResponse[RecipeRecommendationResponse]: 추천 레시피 정보
     """
     try:
-        # 1. 사용자 정보 조회
-        result = await session.execute(
-            select(User).where(User.user_id == user_id)
-        )
-        user = result.scalar_one_or_none()
+        # 1. 사용자 정보 조회 (인증된 사용자 사용)
+        user = current_user
         
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"사용자를 찾을 수 없습니다. (user_id={user_id})"
+                detail="사용자를 찾을 수 없습니다."
             )
         
         # 2. 필수 정보 확인
@@ -123,7 +119,7 @@ async def get_recipe_recommendations(
         
         # 3. 사용자 질병 및 알레르기 정보 조회
         profile_stmt = select(DiseaseAllergyProfile).where(
-            DiseaseAllergyProfile.user_id == user_id
+            DiseaseAllergyProfile.user_id == user.user_id
         )
         profile_result = await session.execute(profile_stmt)
         profiles = profile_result.scalars().all()
@@ -159,7 +155,7 @@ async def get_recipe_recommendations(
             HealthScore, UserFoodHistory.history_id == HealthScore.history_id
         ).where(
             and_(
-                UserFoodHistory.user_id == user_id,
+                UserFoodHistory.user_id == user.user_id,
                 func.date(UserFoodHistory.consumed_at) == today
             )
         )
@@ -364,7 +360,7 @@ async def get_recipe_recommendations(
             )
         
         recipe_service = get_recipe_recommendation_service()
-        print(f"[Recommend] Phase-0 user={user_id} Clarification pipeline 시작")
+        print(f"[Recommend] Phase-0 user={user.user_id} Clarification pipeline 시작")
         decision = await recipe_service.decide_recipe_tool(
             user=user,
             user_request=request.user_request or "",
@@ -432,7 +428,7 @@ async def get_recipe_recommendations(
             excess_warnings=excess_warnings  # ✨ 초과 경고 전달
         )
         
-        print(f"[Recommend] Phase-1 카드 추천 완료 user={user_id}, count={len(result_data.get('recommendations', []))}")
+        print(f"[Recommend] Phase-1 카드 추천 완료 user={user.user_id}, count={len(result_data.get('recommendations', []))}")
         
         health_warning_text = result_data.get("health_warning")
         if health_warning_text:
@@ -508,7 +504,7 @@ async def get_recipe_recommendations(
 @router.post("/detail", response_model=ApiResponse[RecipeDetailResponse])
 async def get_recipe_detail(
     request: RecipeDetailRequest,
-    user_id: int,  # TODO: 실제로는 세션에서 가져와야 함
+    current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_session)
 ):
     """
@@ -516,23 +512,19 @@ async def get_recipe_detail(
     
     **Args:**
         - request: 레시피 상세 요청 (recipe_name)
-        - user_id: 사용자 ID
         - session: DB 세션
     
     **Returns:**
         ApiResponse[RecipeDetailResponse]: 레시피 상세 정보
     """
     try:
-        # 1. 사용자 정보 조회
-        result = await session.execute(
-            select(User).where(User.user_id == user_id)
-        )
-        user = result.scalar_one_or_none()
+        # 1. 사용자 정보 조회 (인증된 사용자 사용)
+        user = current_user
         
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"사용자를 찾을 수 없습니다. (user_id={user_id})"
+                detail="사용자를 찾을 수 없습니다."
             )
         
         print(f"📖 '{request.recipe_name}' 레시피 상세 조회 중...")
@@ -566,23 +558,20 @@ async def get_recipe_detail(
 @router.post("/ingredient-check", response_model=ApiResponse[IngredientCheckResponse])
 async def ingredient_check(
     request: IngredientCheckRequest,
-    user_id: int,
+    current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_session)
 ):
     """레시피 재료 확인용 빠른 조회"""
-    result = await session.execute(select(User).where(User.user_id == user_id))
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="사용자를 찾을 수 없습니다.")
+    user = current_user
     recipe_service = get_recipe_recommendation_service()
-    print(f"[Recommend] Phase-INGREDIENT_CHECK start user={user_id}, recipe={request.recipe_name}")
+    print(f"[Recommend] Phase-INGREDIENT_CHECK start user={user.user_id}, recipe={request.recipe_name}")
     ingredient_list = await recipe_service.get_ingredient_check(request.recipe_name)
     normalized = [item for item in ingredient_list if item.get("name") or item.get("amount")]
     formatted = [
         (f"{item.get('name', '').strip()} {item.get('amount', '').strip()}").strip()
         for item in normalized
     ]
-    print(f"[Recommend] Phase-INGREDIENT_CHECK done user={user_id}, count={len(formatted)}")
+    print(f"[Recommend] Phase-INGREDIENT_CHECK done user={user.user_id}, count={len(formatted)}")
     return ApiResponse(
         success=True,
         data=IngredientCheckResponse(
@@ -598,16 +587,13 @@ async def ingredient_check(
 @router.post("/custom-recipe", response_model=ApiResponse[CustomRecipeResponse])
 async def generate_custom_recipe(
     request: CustomRecipeRequest,
-    user_id: int,
+    current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_session)
 ):
     """재료 제외 정보를 반영한 맞춤 조리법 생성"""
-    result = await session.execute(select(User).where(User.user_id == user_id))
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="사용자를 찾을 수 없습니다.")
+    user = current_user
     recipe_service = get_recipe_recommendation_service()
-    print(f"[Recommend] Phase-COOKING_STEPS start user={user_id}, recipe={request.recipe_name}, excluded={len(request.excluded_ingredients)}")
+    print(f"[Recommend] Phase-COOKING_STEPS start user={user.user_id}, recipe={request.recipe_name}, excluded={len(request.excluded_ingredients)}")
     custom_result = await recipe_service.generate_custom_cooking_steps(
         user=user,
         recipe_name=request.recipe_name,
@@ -657,7 +643,7 @@ async def generate_custom_recipe(
         estimated_time=custom_result.get("estimated_time"),
         intro=custom_result.get("intro")
     )
-    print(f"[Recommend] Phase-COOKING_STEPS done user={user_id}, steps={len(step_models)}")
+    print(f"[Recommend] Phase-COOKING_STEPS done user={user.user_id}, steps={len(step_models)}")
     return ApiResponse(
         success=True,
         data=response,
@@ -679,8 +665,8 @@ def _parse_nutrient_value(value: Any, unit: str = "") -> float:
 @router.post("/save", response_model=ApiResponse[dict])
 async def save_recipe_as_meal(
     save_request: SaveRecipeRequest,
-    http_request: Request,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    user_id: int = Depends(require_authentication),
 ):
     """
     레시피 완료 후 식단 기록을 저장하고 건강 점수를 계산합니다.
@@ -693,22 +679,13 @@ async def save_recipe_as_meal(
     
     **Args:**
         - save_request: 레시피 저장 요청
-        - http_request: HTTP Request 객체
         - session: DB 세션
+        - user_id: 세션에서 가져온 사용자 ID
     
     **Returns:**
         ApiResponse[MealRecordResponse]: 저장된 식단 기록 + 건강 점수
     """
     try:
-        # 인증 확인
-        if not is_authenticated(http_request):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="인증이 필요합니다. 로그인해주세요."
-            )
-        
-        user_id = get_current_user_id(http_request)
-        
         print(f"💾 레시피 '{save_request.recipe_name}' 식단 기록 저장 시작...")
         
         # 영양소 값 파싱

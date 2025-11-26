@@ -247,4 +247,37 @@ class UserIngredient(Base):
     is_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment='사용 여부')
 
     def __repr__(self) -> str:
-        return f"<UserIngredient(ingredient_id={self.ingredient_id}, user_id={self.user_id}, ingredient_name={self.ingredient_name})>"
+        return f"<UserIngredient(ingredient_id={self.ingredient_id}, user_id={self.user_id}, ingredient_name={self.ingredient_name}, count={self.count})>"
+
+class ChatHistory(Base):
+    """사용자와 AI 간의 대화 기록 테이블"""
+
+    __tablename__ = "ChatHistory"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment='사용자 ID')
+    session_id: Mapped[str] = mapped_column(String(255), nullable=False, comment='대화 세션 ID (UUID 또는 고유 식별자)')
+    message_type: Mapped[str] = mapped_column(Enum('human', 'ai', name='message_type_enum'), nullable=False, comment='메시지 발신자 (human 또는 ai)')
+    content: Mapped[str] = mapped_column(Text, nullable=False, comment='대화 내용')
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.current_timestamp(), comment='메시지 생성 시각')
+
+    def __repr__(self) -> str:
+        return f"<ChatHistory(id={self.id}, user_id={self.user_id}, session_id={self.session_id}, message_type={self.message_type})>"
+
+
+class Conversation(Base):
+    """대화 세션 및 요약 관리 테이블"""
+
+    __tablename__ = "UserConversation" # Changed table name
+
+    session_id: Mapped[str] = mapped_column(String(255), primary_key=True, comment='대화 세션 ID (UUID 또는 고유 식별자)')
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment='사용자 ID')
+    all_chat: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment='전체 원본 대화 저장')
+    sum_chat: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment='AI 요약본 저장')
+    last_message_timestamp: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment='all_chat에 있는 가장 최신 메시지의 시각')
+    last_message_summarized_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment='sum_chat이 포함하는 가장 최신 메시지의 시각')
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.current_timestamp(), comment='생성일시')
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.current_timestamp(), onupdate=func.current_timestamp(), comment='수정일시')
+
+    def __repr__(self) -> str:
+        return f"<Conversation(session_id={self.session_id}, user_id={self.user_id})>"
