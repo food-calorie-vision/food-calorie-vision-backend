@@ -20,6 +20,9 @@ class SignupRequest(BaseModel):
     weight: Optional[float] = Field(None, ge=0, description="체중 (kg)")
     health_goal: Literal['gain', 'maintain', 'loss'] = Field(default="maintain", description="건강 목표 (gain/maintain/loss)")
     
+    allergies: Optional[str] = Field(None, description="알레르기 정보 (콤마로 구분된 문자열)")
+    diseases: Optional[str] = Field(None, description="기저질환 정보 (콤마로 구분된 문자열)")
+    
     @field_validator('gender')
     @classmethod
     def validate_gender(cls, v):
@@ -82,3 +85,9 @@ class UserInfoResponse(BaseModel):
     updated_at: str | None = None
     session_max_age: int | None = None  # 세션 최대 유효 시간 (초)
     session_remaining: int | None = None  # 남은 세션 시간 (초, 추정값)
+
+
+class EmailAvailabilityResponse(BaseModel):
+    """이메일 중복 확인 응답"""
+    available: bool
+    message: str
