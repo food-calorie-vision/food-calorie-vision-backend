@@ -46,3 +46,17 @@ app.include_router(api_router, prefix=api_prefix)
 async def root_health_check() -> dict[str, str]:
     """Basic readiness probe for infrastructure monitors."""
     return {"status": "ok"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    from app.core.config import get_settings
+    
+    settings = get_settings()
+    uvicorn.run(
+        "app.main:app",
+        host="127.0.0.1",
+        port=settings.port,
+        reload=True,
+        reload_dirs=["app"],
+    )

@@ -468,9 +468,16 @@ async def save_user_food(
     try:
         print(f"💾 음식 저장 요청: user_id={request.user_id}, food_name={request.food_name}")
         
+        # 0. 음식명 정규화 (재료 순서 통일)
+        from app.services.food_matching_service import get_food_matching_service, normalize_food_name
+        
+        normalized_food_name = normalize_food_name(request.food_name, request.ingredients)
+        if normalized_food_name != request.food_name:
+            print(f"🔄 음식명 정규화: '{request.food_name}' → '{normalized_food_name}'")
+            request.food_name = normalized_food_name
+        
         # 1. food_nutrients에서 영양소 정보 조회 (개선된 매칭 서비스 사용)
         print("🔍 food_nutrients에서 음식 정보 조회 중...")
-        from app.services.food_matching_service import get_food_matching_service
         
         matching_service = get_food_matching_service()
         food_nutrient = await matching_service.match_food_to_db(
@@ -552,20 +559,60 @@ async def save_user_food(
         # 5. NRF9.3 점수 계산 및 HealthScore 저장
         if food_nutrient:
             try:
-                nrf_score = calculate_nrf93_score(food_nutrient)
-                print(f"📊 NRF9.3 점수 계산: {nrf_score:.2f}")
+                from app.services.health_score_service import calculate_nrf93_score as calc_nrf_score, create_health_score
                 
-                # HealthScore 저장
-                health_score = HealthScore(
-                    user_id=request.user_id,
-                    history_id=history.history_id,
-                    nrf_score=nrf_score,
-                    recorded_at=datetime.now()
+                # 영양소 정보 추출
+                protein = getattr(food_nutrient, 'protein', 0) or 0
+                fiber = getattr(food_nutrient, 'fiber', 0) or 0
+                vitamin_a = getattr(food_nutrient, 'vitamin_a', 0) or 0
+                vitamin_c = getattr(food_nutrient, 'vitamin_c', 0) or 0
+                calcium = getattr(food_nutrient, 'calcium', 0) or 0
+                iron = getattr(food_nutrient, 'iron', 0) or 0
+                potassium = getattr(food_nutrient, 'potassium', 0) or 0
+                magnesium = getattr(food_nutrient, 'magnesium', 0) or 0
+                saturated_fat = getattr(food_nutrient, 'saturated_fat', 0) or 0
+                added_sugar = getattr(food_nutrient, 'added_sugar', 0) or 0
+                sodium = getattr(food_nutrient, 'sodium', 0) or 0
+                kcal = getattr(food_nutrient, 'unit', 0) or 0  # unit이 칼로리
+                
+                # NRF9.3 점수 계산
+                score_result = await calc_nrf_score(
+                    protein_g=protein,
+                    fiber_g=fiber,
+                    vitamin_a_ug=vitamin_a,
+                    vitamin_c_mg=vitamin_c,
+                    vitamin_e_mg=0,  # DB에 없으면 0
+                    calcium_mg=calcium,
+                    iron_mg=iron,
+                    potassium_mg=potassium,
+                    magnesium_mg=magnesium,
+                    saturated_fat_g=saturated_fat,
+                    added_sugar_g=added_sugar,
+                    sodium_mg=sodium,
+                    reference_value_g=float(request.portion_size_g)
                 )
-                session.add(health_score)
-                print(f"✅ HealthScore 저장 완료: nrf_score={nrf_score:.2f}")
+                
+                print(f"📊 NRF9.3 점수 계산 완료: {score_result['final_score']:.1f}점")
+                
+                # HealthScore 저장 (올바른 스키마)
+                await create_health_score(
+                    session=session,
+                    history_id=history.history_id,
+                    user_id=request.user_id,
+                    food_id=actual_food_id,
+                    reference_value=int(request.portion_size_g),
+                    kcal=int(kcal * float(request.portion_size_g) / 100.0),
+                    positive_score=int(score_result['positive_score']),
+                    negative_score=int(score_result['negative_score']),
+                    final_score=int(score_result['final_score']),
+                    food_grade=score_result['food_grade'],
+                    calc_method=score_result['calc_method']
+                )
+                print(f"✅ HealthScore 저장 완료: {score_result['final_score']:.1f}점, {score_result['food_grade']}")
             except Exception as e:
                 print(f"⚠️ NRF 점수 계산 실패: {e}")
+                import traceback
+                traceback.print_exc()
         else:
             print(f"⚠️ food_nutrient가 없어 NRF 점수를 계산하지 않음")
         

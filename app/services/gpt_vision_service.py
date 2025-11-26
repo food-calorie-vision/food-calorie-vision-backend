@@ -1168,12 +1168,14 @@ class GPTVisionService:
                     additional_part = line.split('추가:')[-1].strip()
                     additional_part = additional_part.lstrip('0123456789.-)# ').strip()
                     additional_part = additional_part.replace('**', '').replace('*', '')
-                    if additional_part and additional_part != '알 수 없음':
+                    # "없음", "알 수 없음" 제외
+                    if additional_part and additional_part not in ['알 수 없음', '없음']:
                         additional_found.append(additional_part)
                 else:
                     line = line.lstrip('0123456789.-)# ').strip()
                     line = line.replace('**', '').replace('*', '')
-                    if line and line != '알 수 없음' and not line.startswith('추가'):
+                    # "없음", "알 수 없음" 제외
+                    if line and line not in ['알 수 없음', '없음'] and not line.startswith('추가'):
                         ingredients.append(line)
             
             # 추가 발견된 것들도 포함

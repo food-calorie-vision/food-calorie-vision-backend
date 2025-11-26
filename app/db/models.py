@@ -243,9 +243,8 @@ class UserIngredient(Base):
     ingredient_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment='사용자 ID')
     ingredient_name: Mapped[str] = mapped_column(String(100), nullable=False, comment='식재료 이름')
-    count: Mapped[int] = mapped_column(Integer, nullable=False, default=1, comment='수량')
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.current_timestamp(), comment='등록일')
     is_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment='사용 여부')
 
     def __repr__(self) -> str:
-        return f"<UserIngredient(ingredient_id={self.ingredient_id}, user_id={self.user_id}, ingredient_name={self.ingredient_name}, count={self.count})>"
+        return f"<UserIngredient(ingredient_id={self.ingredient_id}, user_id={self.user_id}, ingredient_name={self.ingredient_name})>"
