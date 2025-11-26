@@ -358,6 +358,37 @@ async def get_dashboard_stats(
         
         # 7. 이번 주 총 칼로리 (지난 7일 합계)
         total_calories_week = sum(item["calories"] for item in daily_calories)
+
+        # 8. 영양소 밸런스 (최근 7일)
+        portion_ratio = func.coalesce(
+            func.coalesce(UserFoodHistory.portion_size_g, 0)
+            / func.nullif(func.coalesce(FoodNutrient.reference_value, 0), 0),
+            0,
+        )
+        nutrition_stmt = (
+            select(
+                func.sum(func.coalesce(FoodNutrient.protein, 0) * portion_ratio),
+                func.sum(func.coalesce(FoodNutrient.carb, 0) * portion_ratio),
+                func.sum(func.coalesce(FoodNutrient.fat, 0) * portion_ratio),
+            )
+            .select_from(UserFoodHistory)
+            .join(FoodNutrient, UserFoodHistory.food_id == FoodNutrient.food_id)
+            .where(
+                and_(
+                    UserFoodHistory.user_id == user_id,
+                    func.date(UserFoodHistory.consumed_at) >= seven_days_ago,
+                )
+            )
+        )
+        nutrition_result = await session.execute(nutrition_stmt)
+        protein, carbs, fat = nutrition_result.one_or_none() or (0, 0, 0)
+        
+        total_macros = (protein or 0) + (carbs or 0) + (fat or 0)
+        nutrition_balance = {
+            "protein": round(protein * 100 / total_macros, 1) if total_macros > 0 else 0,
+            "carbs": round(carbs * 100 / total_macros, 1) if total_macros > 0 else 0,
+            "fat": round(fat * 100 / total_macros, 1) if total_macros > 0 else 0,
+        }
         
         return ApiResponse(
             success=True,
@@ -369,7 +400,7 @@ async def get_dashboard_stats(
                 score_change=score_change,
                 frequent_foods=frequent_foods,
                 daily_calories=daily_calories,
-                nutrition_balance={}  # TODO: 추후 구현
+                nutrition_balance=nutrition_balance
             ),
             message="✅ 대시보드 통계 조회 완료"
         )

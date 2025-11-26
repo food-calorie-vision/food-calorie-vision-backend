@@ -1,6 +1,5 @@
 """API v1 schemas package"""
 
-from app.api.v1.schemas.chat import ChatData, ChatRequest
 from app.api.v1.schemas.common import ApiResponse
 from app.api.v1.schemas.meals import (
     MealNutrients,
@@ -37,7 +36,4 @@ __all__ = [
     "FoodAnalysisResult",
     "FoodAnalysisData",
     "FoodNutrients",
-    # Chat
-    "ChatRequest",
-    "ChatData",
 ]

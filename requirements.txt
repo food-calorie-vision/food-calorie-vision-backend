@@ -45,5 +45,5 @@ isort==5.13.2
 ruff==0.6.9
 
 # Optional: Redis for distributed session storage
-# redis==5.0.1
-# aioredis==2.0.1
+redis==5.0.1
+aioredis==2.0.1

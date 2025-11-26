@@ -1,12 +1,15 @@
 """API v1 라우터 - ERDCloud 스키마 기반"""
 from fastapi import APIRouter
 
-from app.api.v1.routes import auth, users, vision, customer_service, ingredients, meals, recommend, recipes
+from app.api.v1.routes import auth, users, vision, customer_service, ingredients, meals, recommend, recipes, chat
 
 api_router = APIRouter()
 
 # 인증 관련 라우트
 api_router.include_router(auth.router, prefix="/auth", tags=["authentication"])
+
+# 채팅 관련 라우트
+api_router.include_router(chat.router, tags=["chat"])
 
 # 사용자 관련 라우트
 api_router.include_router(users.router, prefix="/user", tags=["users"])

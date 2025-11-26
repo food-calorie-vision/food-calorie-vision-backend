@@ -13,6 +13,7 @@ from app.api.v1.schemas.diet import (
 )
 from app.api.v1.schemas.common import ApiResponse
 from app.db.models import User, Food, UserFoodHistory, DietPlan, DietPlanMeal
+from app.api.dependencies import get_current_active_user
 from app.db.session import get_session
 from app.services.diet_recommendation_service import get_diet_recommendation_service
 
@@ -22,7 +23,7 @@ router = APIRouter(prefix="/recommend", tags=["Recommendations"])
 @router.post("/diet-plan", response_model=ApiResponse[DietPlanResponse])
 async def get_diet_plan_recommendation(
     request: DietPlanRequest,
-    user_id: int,  # TODO: 실제로는 세션/토큰에서 가져와야 함
+    current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_session)
 ):
     """
@@ -54,7 +55,7 @@ async def get_diet_plan_recommendation(
     
     **Example Request:**
     ```json
-    POST /api/v1/recommend/diet-plan?user_id=1
+    POST /api/v1/recommend/diet-plan
     {
         "user_request": "고기류를 먹고 싶어요",
         "activity_level": "moderate"
@@ -93,16 +94,13 @@ async def get_diet_plan_recommendation(
     ```
     """
     try:
-        # 1. 사용자 정보 조회
-        result = await session.execute(
-            select(User).where(User.user_id == user_id)
-        )
-        user = result.scalar_one_or_none()
+        # 1. 사용자 정보 조회 (인증된 사용자 사용)
+        user = current_user
         
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"사용자를 찾을 수 없습니다. (user_id={user_id})"
+                detail="사용자를 찾을 수 없습니다."
             )
         
         # 2. 필수 정보 확인
@@ -145,6 +143,7 @@ async def get_diet_plan_recommendation(
 @router.post("/save-diet-plan", response_model=ApiResponse[SaveDietPlanResponse])
 async def save_diet_plan(
     request: SaveDietPlanRequest,
+    current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_session)
 ):
     """
@@ -189,19 +188,8 @@ async def save_diet_plan(
     ```
     """
     try:
-        # 1. 사용자 존재 확인
-        result = await session.execute(
-            select(User).where(User.user_id == request.user_id)
-        )
-        user = result.scalar_one_or_none()
-        
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"사용자를 찾을 수 없습니다. (user_id={request.user_id})"
-            )
-        
-        print(f"💾 추천 식단 저장 요청: user_id={request.user_id}, diet_plan={request.diet_plan_name}, meals={len(request.meals)}개")
+        user = current_user
+        print(f"💾 추천 식단 저장 요청: user_id={user.user_id}, diet_plan={request.diet_plan_name}, meals={len(request.meals)}개")
         
         # 2. DietPlan 생성 (고유 ID 생성)
         timestamp = int(datetime.now().timestamp() * 1000)
@@ -215,7 +203,7 @@ async def save_diet_plan(
         
         diet_plan = DietPlan(
             diet_plan_id=diet_plan_id,
-            user_id=request.user_id,
+            user_id=user.user_id,
             plan_name=request.diet_plan_name,
             description=request.description,
             bmr=request.bmr,
@@ -282,7 +270,7 @@ async def save_diet_plan(
 
 @router.get("/my-diet-plans", response_model=ApiResponse)
 async def get_my_diet_plans(
-    user_id: int,  # TODO: 세션에서 가져오기
+    current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_session)
 ):
     """
@@ -296,26 +284,16 @@ async def get_my_diet_plans(
     
     **Example:**
     ```
-    GET /api/v1/recommend/my-diet-plans?user_id=1
+    GET /api/v1/recommend/my-diet-plans
     ```
     """
     try:
-        # 사용자 확인
-        result = await session.execute(
-            select(User).where(User.user_id == user_id)
-        )
-        user = result.scalar_one_or_none()
-        
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"사용자를 찾을 수 없습니다. (user_id={user_id})"
-            )
+        user = current_user
         
         # 식단 목록 조회 (최신순)
         result = await session.execute(
             select(DietPlan)
-            .where(DietPlan.user_id == user_id)
+            .where(DietPlan.user_id == user.user_id)
             .order_by(DietPlan.created_at.desc())
         )
         diet_plans = result.scalars().all()
@@ -347,7 +325,7 @@ async def get_my_diet_plans(
                 "progress_percent": progress_percent
             })
         
-        print(f"✅ 식단 목록 조회: user_id={user_id}, 총 {len(diet_plans_data)}개")
+        print(f"✅ 식단 목록 조회: user_id={user.user_id}, 총 {len(diet_plans_data)}개")
         
         return ApiResponse(
             success=True,
@@ -368,7 +346,7 @@ async def get_my_diet_plans(
 @router.get("/diet-plans/{diet_plan_id}", response_model=ApiResponse)
 async def get_diet_plan_detail(
     diet_plan_id: str,
-    user_id: int,  # TODO: 세션에서 가져오기
+    current_user: User = Depends(get_current_active_user),
     session: AsyncSession = Depends(get_session)
 ):
     """
@@ -381,7 +359,7 @@ async def get_diet_plan_detail(
     
     **Example:**
     ```
-    GET /api/v1/recommend/diet-plans/plan_1732012345678?user_id=1
+    GET /api/v1/recommend/diet-plans/plan_1732012345678
     ```
     """
     try:
@@ -390,7 +368,7 @@ async def get_diet_plan_detail(
             select(DietPlan)
             .where(
                 DietPlan.diet_plan_id == diet_plan_id,
-                DietPlan.user_id == user_id
+                DietPlan.user_id == current_user.user_id
             )
         )
         diet_plan = result.scalar_one_or_none()

@@ -88,7 +88,6 @@ class SaveMealRequest(BaseModel):
 
 class SaveDietPlanRequest(BaseModel):
     """추천 식단 저장 요청 스키마"""
-    user_id: int = Field(description="사용자 ID")
     diet_plan_name: str = Field(description="식단 이름 (예: '고단백 식단')")
     description: Optional[str] = Field(default=None, description="식단 설명")
     
@@ -103,7 +102,6 @@ class SaveDietPlanRequest(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "user_id": 1,
                 "diet_plan_name": "고단백 식단",
                 "meals": [
                     {
