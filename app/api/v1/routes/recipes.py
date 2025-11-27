@@ -371,6 +371,8 @@ async def get_recipe_recommendations(
         call_tool = bool(decision.get("call_tool"))
         assistant_reply = decision.get("assistant_reply") or "조금 더 자세히 말씀해주시면 레시피를 준비해드릴게요!"
         decision_suggestions = decision.get("suggestions") or []
+        decision_intent_summary = (decision.get("intent_summary") or "").strip()
+        decision_risk_flags = decision.get("risk_flags") if isinstance(decision.get("risk_flags"), list) else []
         if not call_tool:
             suggestions = decision_suggestions or [
                 "자세히 알려줄게",
@@ -414,10 +416,17 @@ async def get_recipe_recommendations(
         
         # 6. 레시피 추천 서비스 호출 (칼로리/나트륨 초과가 아닌 경우에만)
         recipe_service = get_recipe_recommendation_service()
+        final_intent_text = decision_intent_summary or combined_user_intent
+        intent_metadata = None
+        if decision_intent_summary or decision_risk_flags:
+            intent_metadata = {
+                "intent_summary": decision_intent_summary,
+                "risk_flags": decision_risk_flags
+            }
         result_data = await recipe_service.get_recipe_recommendations(
             user=user,
             user_request=request.user_request or "",
-            llm_user_intent=combined_user_intent,
+            llm_user_intent=final_intent_text,
             conversation_history=request.conversation_history,
             diseases=diseases if diseases else None,
             allergies=allergies if allergies else None,
@@ -425,7 +434,8 @@ async def get_recipe_recommendations(
             has_eaten_today=has_eaten_today,
             deficient_nutrients=deficient_nutrients if deficient_nutrients else None,
             meal_type=combined_meal_type,
-            excess_warnings=excess_warnings  # ✨ 초과 경고 전달
+            excess_warnings=excess_warnings,  # ✨ 초과 경고 전달
+            intent_metadata=intent_metadata
         )
         
         print(f"[Recommend] Phase-1 카드 추천 완료 user={user.user_id}, count={len(result_data.get('recommendations', []))}")
@@ -434,7 +444,7 @@ async def get_recipe_recommendations(
         if health_warning_text:
             confirmation = await recipe_service.evaluate_health_warning(
                 user=user,
-                user_request=combined_user_intent,
+                user_request=final_intent_text,
                 health_warning=health_warning_text,
                 conversation_history=request.conversation_history
             )
@@ -470,7 +480,7 @@ async def get_recipe_recommendations(
         )
         result_suggestions = await recipe_service.generate_action_suggestions(
             action_type="RECOMMENDATION_RESULT",
-            user_request=combined_user_intent,
+            user_request=final_intent_text,
             meal_type=combined_meal_type,
             recommendations=result_data.get("recommendations"),
             deficient_nutrients=deficient_nutrients if deficient_nutrients else None,

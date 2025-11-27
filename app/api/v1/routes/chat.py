@@ -3,6 +3,7 @@ import re
 import uuid
 from datetime import datetime
 from functools import lru_cache
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from langchain.prompts import ChatPromptTemplate
@@ -63,6 +64,20 @@ RECIPE_REQUEST_PATTERNS = [
     re.compile(r"(어떻게|방법).*(만들|요리해)"),
     re.compile(r"(레시피|조리법|만드는\s?법).*(추천해줘|알려줘|보여줘|찾아줘)"),
 ]
+
+
+def _log_recipe_debug(event: str, extra: Optional[Dict[str, Any]] = None) -> None:
+    payload: Dict[str, Any] = {
+        "event": event,
+        "ts": datetime.utcnow().isoformat(),
+    }
+    if extra:
+        payload.update(extra)
+    try:
+        serialized = json.dumps(payload, ensure_ascii=False)
+    except TypeError:
+        serialized = str(payload)
+    print(f"🧩 [RecipeConfirm] {serialized}")
 
 
 CLARIFY_PROMPT = ChatPromptTemplate.from_messages(
@@ -201,6 +216,7 @@ async def handle_chat_message(
     diseases = cached_context.diseases
     allergies = cached_context.allergies
     has_eaten_today = cached_context.has_eaten_today
+    recipe_service = get_recipe_recommendation_service()
 
     conversation = await db.get(Conversation, request.session_id)
     is_new_conversation = conversation is None
@@ -312,20 +328,113 @@ async def handle_chat_message(
         ai_response_payload = json.dumps(clarify_payload, ensure_ascii=False)
         display_text = clarify_payload.get("message", "")
     else:
-        agent_factory = get_langchain_agent_factory()
-        agent_executor = await agent_factory.create_executor(context=agent_context)
+        safety_mode = (request.safety_mode or "").lower()
+        quick_confirmation_payload: Optional[Dict[str, Any]] = None
+        if safety_mode not in {"proceed", "health_first"}:
+            quick_analysis = await recipe_service.quick_analyze_intent(
+                user=current_user,
+                intent_text=request.message,
+                diseases=diseases,
+                allergies=allergies,
+                has_eaten_today=has_eaten_today,
+            )
+            disease_conflict = bool(quick_analysis.get("disease_conflict"))
+            allergy_conflict = bool(quick_analysis.get("allergy_conflict"))
+            _log_recipe_debug(
+                "HealthCheck",
+                {
+                    "session_id": request.session_id,
+                    "user_id": current_user.user_id,
+                    "disease_conflict": disease_conflict,
+                    "allergy_conflict": allergy_conflict,
+                    "diseases": diseases or [],
+                    "allergies": allergies or [],
+                },
+            )
+            requires_confirmation = disease_conflict or allergy_conflict
+            if requires_confirmation:
+                disease_text = ", ".join(diseases or []) or "없음"
+                allergy_text = ", ".join(allergies or []) or "없음"
+                conflict_lines = []
+                if disease_conflict:
+                    conflict_lines.append(f"등록된 질병({disease_text})과 요청한 메뉴가 충돌할 수 있어요.")
+                if allergy_conflict:
+                    conflict_lines.append(f"알레르기 목록({allergy_text})에 포함된 재료가 있어요.")
+                combined_warning = quick_analysis.get("health_warning") or "\n".join(conflict_lines)
+                confirm_message = (
+                    f"{quick_analysis.get('user_message') or '건강을 고려해볼까요?'}\n\n"
+                    f"{combined_warning}\n\n"
+                    "건강을 우선해서 레시피를 조정할까요, 아니면 그대로 진행할까요?"
+                )
+                quick_confirmation_payload = {
+                    "response_id": f"health-{uuid.uuid4()}",
+                    "action_type": "HEALTH_CONFIRMATION",
+                    "message": confirm_message,
+                    "data": {
+                        "health_warning": combined_warning,
+                        "user_friendly_message": quick_analysis.get("user_message"),
+                    },
+                    "suggestions": ["그대로 진행해줘", "건강하게 바꿔줘"],
+                }
+            else:
+                _log_recipe_debug(
+                    "HealthCheckNoConflict",
+                    {
+                        "session_id": request.session_id,
+                        "user_id": current_user.user_id,
+                        "diseases": diseases or [],
+                        "allergies": allergies or [],
+                    },
+                )
 
-        ai_response = await agent_executor.ainvoke({"input": request.message})
-        ai_response_text = ai_response.get("output", "죄송해요, 답변을 만들지 못했어요.")
-
-        fallback_override = None
-        if "iteration limit" in ai_response_text.lower():
-            fallback_override = await _build_recipe_fallback_response()
-
-        if fallback_override:
-            ai_response_payload, display_text = fallback_override
+        if quick_confirmation_payload:
+            ai_response_payload = json.dumps(quick_confirmation_payload, ensure_ascii=False)
+            display_text = quick_confirmation_payload["message"]
         else:
-            ai_response_payload, display_text = _normalize_agent_output(ai_response_text)
+            _log_recipe_debug(
+                "ExecuteModeEntered",
+                {
+                "session_id": request.session_id,
+                "user_id": current_user.user_id,
+                "message_preview": request.message[:120],
+                "diseases_count": len(diseases or []),
+                "allergies_count": len(allergies or []),
+                "has_eaten_today": has_eaten_today,
+            },
+        )
+            agent_factory = get_langchain_agent_factory()
+            _log_recipe_debug("LangChainAgentFactoryReady", {"session_id": request.session_id})
+            agent_executor = await agent_factory.create_executor(context=agent_context)
+            _log_recipe_debug(
+                "LangChainAgentExecutorReady",
+                {"session_id": request.session_id},
+            )
+
+            agent_input = request.message
+            if safety_mode == "proceed":
+                agent_input += "\n\n[사용자 선택] 건강 경고를 인지했지만 원래 요청 그대로 진행해도 괜찮습니다."
+            elif safety_mode == "health_first":
+                agent_input += "\n\n[사용자 선택] 건강을 우선하니 저염/저지방 대체 레시피를 우선 추천해주세요."
+
+            ai_response = await agent_executor.ainvoke({"input": agent_input})
+            _log_recipe_debug(
+                "LangChainAgentInvokeFinished",
+                {
+                    "session_id": request.session_id,
+                    "raw_output_preview": str(ai_response.get("output", ""))[:120],
+                },
+            )
+            ai_response_text = ai_response.get("output", "죄송해요, 답변을 만들지 못했어요.")
+
+            fallback_override = None
+            if "iteration limit" in ai_response_text.lower():
+                fallback_override = await _build_recipe_fallback_response()
+                _log_recipe_debug("FallbackTriggered", {"session_id": request.session_id})
+
+            if fallback_override:
+                ai_response_payload, display_text = fallback_override
+            else:
+                ai_response_payload, display_text = _normalize_agent_output(ai_response_text)
 
     if is_new_conversation:
         conversation = Conversation(
