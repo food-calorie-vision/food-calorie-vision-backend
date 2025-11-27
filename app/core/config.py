@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     api_prefix: str = "/api"
     api_version: str = "v1"
     port: int = 8000
-    database_url: str = "mysql+asyncmy://root:dufdjwnj@10.43.40.99:3306/tempdb"
+    database_url: str = "mysql+asyncmy://oper:dufdjwnj@10.43.40.78:3306/tempdb"
     cors_allow_origins: list[str] = ["http://localhost:3000"]
     
     # Session settings

@@ -82,9 +82,26 @@ class SaveFoodRequest(BaseModel):
     food_class_1: str | None = Field(None, alias="foodClass1")  # 대분류
     food_class_2: str | None = Field(None, alias="foodClass2")  # 중분류
     ingredients: list[str] = []  # 재료 리스트
-    portion_size_g: float | None = Field(None, alias="portionSizeG")  # 섭취량(g)
+    portion_size_g: float | None = Field(100.0, alias="portionSizeG")  # 섭취량(g) - 기본값 100g
     image_ref: str | None = Field(None, alias="imageRef")  # 이미지 참조 (선택)
     category: str | None = None  # 카테고리 (선택)
+    
+    # 영양소 정보 (선택사항 - LLM이 추정하거나 프론트에서 전달)
+    protein: float | None = None  # 단백질 (g)
+    carbs: float | None = None  # 탄수화물 (g)
+    fat: float | None = None  # 지방 (g)
+    fiber: float | None = None  # 식이섬유 (g)
+    sodium: float | None = None  # 나트륨 (mg)
+    calcium: float | None = None  # 칼슘 (mg)
+    iron: float | None = None  # 철분 (mg)
+    vitamin_a: float | None = None  # 비타민 A (μg)
+    vitamin_c: float | None = None  # 비타민 C (mg)
+    potassium: float | None = None  # 칼륨 (mg)
+    magnesium: float | None = None  # 마그네슘 (mg)
+    saturated_fat: float | None = None  # 포화지방 (g)
+    cholesterol: float | None = None  # 콜레스테롤 (mg)
+    trans_fat: float | None = None  # 트랜스지방 (g)
+    added_sugar: float | None = None  # 첨가당 (g)
 
 
 class SaveFoodResponse(BaseModel):
