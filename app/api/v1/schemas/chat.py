@@ -5,6 +5,7 @@ class ChatMessageRequest(BaseModel):
     session_id: str = Field(..., description="클라이언트가 관리하는 대화 세션 ID.")
     message: str = Field(..., description="사용자 메시지 텍스트.")
     mode: str = Field("clarify", description="clarify 또는 execute")
+    safety_mode: Optional[str] = Field(None, description="health_first/proceed 중 하나. 건강 경고 확인 단계에서만 사용.")
     
 class ChatMessageResponse(BaseModel):
     session_id: str = Field(..., description="대화 세션 ID.")

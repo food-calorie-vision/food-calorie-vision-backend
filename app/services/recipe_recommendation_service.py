@@ -1,6 +1,9 @@
 """레시피 추천 서비스 - LangChain 기반 개인화 레시피 추천 및 단계별 조리법"""
+import asyncio
 import json
 import re
+import time
+from dataclasses import dataclass
 from typing import Optional, List, Dict, Any
 
 from langchain_openai import ChatOpenAI
@@ -9,6 +12,45 @@ from app.core.config import get_settings
 from app.db.models import User
 
 settings = get_settings()
+DETAIL_CACHE_TTL_SECONDS = 300
+
+
+@dataclass
+class RecipePromptContext:
+    """LLM 프롬프트를 구성할 때 반복 사용되는 건강/끼니 맥락."""
+
+    health_goal_label: str
+    health_info_text: str
+    today_status_text: str
+    excess_warnings_text: str
+    meal_type_text: str
+
+
+@dataclass
+class RecipePipelineTasks:
+    """병렬로 실행되는 레시피 관련 LangChain 작업 묶음."""
+
+    health_analysis_task: Optional[asyncio.Task]
+    recommendation_task: asyncio.Task
+    detail_prefetch_task: Optional[asyncio.Task] = None
+
+    async def get_health_analysis(self) -> Optional[Dict[str, Any]]:
+        if not self.health_analysis_task:
+            return None
+        return await self.health_analysis_task
+
+    async def get_recommendations(self) -> Dict[str, Any]:
+        return await self.recommendation_task
+
+    async def get_prefetched_details(self) -> Dict[str, Any]:
+        if not self.detail_prefetch_task:
+            return {}
+        return await self.detail_prefetch_task
+
+    def cancel_pending(self) -> None:
+        for task in (self.health_analysis_task, self.recommendation_task, self.detail_prefetch_task):
+            if task and not task.done():
+                task.cancel()
 
 
 class RecipeRecommendationService:
@@ -28,94 +70,124 @@ class RecipeRecommendationService:
             temperature=0.4,
             model_kwargs={"response_format": {"type": "json_object"}}
         )
-    
-    async def get_recipe_recommendations(
+        self._prefetched_detail_cache: Dict[tuple[int, str], Dict[str, Any]] = {}
+
+    def _build_prompt_context(
         self,
         user: User,
-        user_request: str = "",
-        llm_user_intent: Optional[str] = None,
-        conversation_history: List[Dict[str, str]] = None,
-        diseases: List[str] = None,
-        allergies: List[str] = None,
-        user_nickname: str = "",
-        has_eaten_today: bool = True,
-        deficient_nutrients: List[Dict[str, any]] = None,
-        excess_warnings: List[str] = None,
-        meal_type: str = None
-    ) -> dict:
-        """
-        사용자 정보를 기반으로 GPT가 레시피 3개를 추천
-        
-        Args:
-            user: User 객체 (gender, age, weight, health_goal 포함)
-            user_request: 사용자의 최신 발화
-            llm_user_intent: LLM 프롬프트에 사용할 확장된 사용자 의도(없으면 user_request 사용)
-            conversation_history: 대화 히스토리 (선택사항)
-            diseases: 사용자의 질병 목록 (예: ["고지혈증", "고혈압"])
-            allergies: 사용자의 알레르기 목록
-            user_nickname: 사용자 닉네임 (메시지 생성용)
-        
-        Returns:
-            dict: {
-                "recommendations": [레시피 3개],
-                "health_warning": 건강 경고 메시지 (있으면),
-                "inferred_preference": 추론된 선호도 (시스템용),
-                "user_friendly_message": 사용자에게 보여줄 친화적 메시지
-            }
-        """
-        # 건강 목표에 따른 한글 설명
+        diseases: Optional[List[str]],
+        allergies: Optional[List[str]],
+        has_eaten_today: bool,
+        deficient_nutrients: Optional[List[Dict[str, Any]]],
+        excess_warnings: Optional[List[str]],
+        meal_type: Optional[str],
+    ) -> RecipePromptContext:
         health_goal_kr = {
             "loss": "체중 감량",
             "maintain": "체중 유지",
             "gain": "체중 증가"
         }.get(user.health_goal, "체중 유지")
-        
-        # 질병 및 알레르기 정보 구성
+
         health_info_parts = []
         if diseases:
             health_info_parts.append(f"질병: {', '.join(diseases)}")
         if allergies:
             health_info_parts.append(f"알레르기: {', '.join(allergies)}")
         health_info_text = "\n- " + "\n- ".join(health_info_parts) if health_info_parts else "\n- 없음"
-        
-        # 오늘 식사 현황 및 부족 영양소 정보 구성
+
         today_status_text = ""
         if not has_eaten_today:
             today_status_text = "\n\n**오늘 식사 현황:**\n- 오늘 아직 아무것도 먹지 않았습니다."
         elif deficient_nutrients:
-            deficient_list = [f"- {n['name']}: 권장량의 {n['percentage']}%만 섭취 (부족)" for n in deficient_nutrients]
+            deficient_list = [
+                f"- {n['name']}: 권장량의 {n['percentage']}%만 섭취 (부족)"
+                for n in deficient_nutrients
+            ]
             today_status_text = f"\n\n**오늘 식사 현황 및 부족 영양소:**\n" + "\n".join(deficient_list)
             today_status_text += "\n\n**중요:** 사용자가 요청한 재료에 추가로 부족한 영양소를 보완할 수 있는 재료를 포함한 레시피를 추천해주세요."
             today_status_text += "\n예: 단백질이 부족하면 닭가슴살, 계란, 두부 등을 추가하고, 식이섬유가 부족하면 채소, 과일, 견과류 등을 추가하세요."
-        
-        # 초과 경고 정보 구성
+
         excess_warnings_text = ""
         if excess_warnings:
-            excess_warnings_text = "\n\n**⚠️ 건강 알림:**\n" + "\n".join([f"- {w}" for w in excess_warnings])
+            excess_warnings_text = "\n\n**⚠️ 건강 알림:**\n" + "\n".join(
+                [f"- {w}" for w in excess_warnings]
+            )
             excess_warnings_text += "\n\n**중요:** 위 경고를 사용자에게 알리되, 레시피는 반드시 추천해주세요. 다만 칼로리와 나트륨이 낮은 건강한 레시피를 우선 추천해주세요."
-        
-        # 식사 유형에 따른 설명
+
         meal_type_kr = {
             "breakfast": "아침",
             "lunch": "점심",
             "dinner": "저녁",
             "snack": "간식"
         }.get(meal_type, "")
-        
-        meal_type_text = f"\n- **식사 유형:** {meal_type_kr} (이 시간대에 적합한 레시피를 추천하세요)" if meal_type else ""
-        
-        # GPT 프롬프트 생성
+        meal_type_text = (
+            f"\n- **식사 유형:** {meal_type_kr} (이 시간대에 적합한 레시피를 추천하세요)"
+            if meal_type_kr else ""
+        )
+
+        return RecipePromptContext(
+            health_goal_label=health_goal_kr,
+            health_info_text=health_info_text,
+            today_status_text=today_status_text,
+            excess_warnings_text=excess_warnings_text,
+            meal_type_text=meal_type_text,
+        )
+
+    def _prepare_conversation_messages(
+        self,
+        conversation_history: Optional[List[Dict[str, str]]],
+        keep_last: int = 6,
+    ) -> List[Any]:
+        """LLM에 전달할 대화 히스토리를 최신 n개만 남겨 구성."""
+        if not conversation_history:
+            return []
+        trimmed = conversation_history[-keep_last:]
+        prepared: List[Any] = []
+        for msg in trimmed:
+            role = msg.get("role")
+            content = msg.get("content", "")
+            if not content:
+                continue
+            if role == "assistant":
+                prepared.append(AIMessage(content=content))
+            else:
+                prepared.append(HumanMessage(content=content))
+        return prepared
+
+    def _build_recipe_prompt(
+        self,
+        user: User,
+        intent_text: str,
+        context: RecipePromptContext,
+        intent_metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        metadata_text = ""
+        if intent_metadata:
+            safe_items = []
+            if intent_metadata.get("intent_summary"):
+                safe_items.append(f"- 의도 요약: {intent_metadata['intent_summary']}")
+            risk_flags = intent_metadata.get("risk_flags")
+            if isinstance(risk_flags, list) and risk_flags:
+                safe_items.append(f"- 위험 요소: {', '.join(risk_flags)}")
+            safety_mode = intent_metadata.get("safety_mode")
+            if safety_mode == "health_first":
+                safe_items.append("- 사용자 선택: 건강을 우선하는 대체 레시피 선호")
+            elif safety_mode == "proceed":
+                safe_items.append("- 사용자 선택: 경고를 인지했지만 원래 요청 그대로 진행")
+            if safe_items:
+                metadata_text = "\n\n**추가 분석:**\n" + "\n".join(safe_items)
+
         prompt = f"""당신은 영양사이자 요리 전문가입니다. 사용자의 건강 정보와 선호도를 기반으로 레시피를 추천해주세요.
 
 **사용자 정보:**
 - 성별: {'남성' if user.gender == 'M' else '여성' if user.gender == 'F' else '기타'}
 - 나이: {user.age or 30}세
 - 체중: {float(user.weight or 70.0)}kg
-- 건강 목표: {health_goal_kr}
-- 건강 상태:{health_info_text}{today_status_text}{excess_warnings_text}{meal_type_text}
+- 건강 목표: {context.health_goal_label}
+- 건강 상태:{context.health_info_text}{context.today_status_text}{context.excess_warnings_text}{context.meal_type_text}
 
-**사용자 요청:**
-{llm_user_intent or user_request or "특별한 요청 없음"}
+**사용자 요청 또는 분석된 의도:**
+{intent_text or "특별한 요청 없음"}{metadata_text}
 
 **중요 지시사항:**
 1. 사용자의 요청에서 식감, 맛, 음식 종류 등의 선호도를 추론하세요.
@@ -147,18 +219,131 @@ class RecipeRecommendationService:
 }}
 
 JSON 형식만 반환하세요. 다른 텍스트는 포함하지 마세요."""
+        return prompt
+
+    def launch_parallel_recipe_pipeline(
+        self,
+        *,
+        recommendation_kwargs: Dict[str, Any],
+        health_check_kwargs: Optional[Dict[str, Any]] = None,
+        prefetch_detail_limit: int = 0,
+    ) -> RecipePipelineTasks:
+        """레시피 추천/건강 분석/상세 조리법 생성을 병렬로 준비."""
+
+        try:
+            user_for_detail = recommendation_kwargs["user"]
+        except KeyError as exc:  # pragma: no cover - guardrail
+            raise ValueError("recommendation_kwargs must include 'user'") from exc
+
+        loop = asyncio.get_running_loop()
+
+        recommendation_task = loop.create_task(
+            self.get_recipe_recommendations(**recommendation_kwargs)
+        )
+
+        health_task = (
+            loop.create_task(self.quick_analyze_intent(**health_check_kwargs))
+            if health_check_kwargs
+            else None
+        )
+
+        detail_task: Optional[asyncio.Task] = None
+        if prefetch_detail_limit > 0:
+            async def _prefetch_details() -> Dict[str, Any]:
+                try:
+                    payload = await recommendation_task
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    return {}
+
+                recipes = (payload.get("recommendations") or [])[:prefetch_detail_limit]
+                recipe_names = [rec.get("name") for rec in recipes if rec.get("name")]
+                if not recipe_names:
+                    return {}
+
+                detail_results = await asyncio.gather(
+                    *[
+                        self.get_recipe_detail(recipe_name=name, user=user_for_detail)
+                        for name in recipe_names
+                    ],
+                    return_exceptions=True,
+                )
+                details: Dict[str, Any] = {}
+                for name, result in zip(recipe_names, detail_results):
+                    if isinstance(result, Exception):
+                        continue
+                    details[name] = result
+                    self._store_prefetched_detail(user_for_detail, name, result)
+                return details
+
+            detail_task = loop.create_task(_prefetch_details())
+            detail_task.add_done_callback(self._silence_background_task)
+
+        return RecipePipelineTasks(
+            health_analysis_task=health_task,
+            recommendation_task=recommendation_task,
+            detail_prefetch_task=detail_task,
+        )
+
+    async def get_recipe_recommendations(
+        self,
+        user: User,
+        user_request: str = "",
+        llm_user_intent: Optional[str] = None,
+        conversation_history: List[Dict[str, str]] = None,
+        diseases: List[str] = None,
+        allergies: List[str] = None,
+        user_nickname: str = "",
+        has_eaten_today: bool = True,
+        deficient_nutrients: List[Dict[str, any]] = None,
+        excess_warnings: List[str] = None,
+        meal_type: str = None,
+        intent_metadata: Optional[Dict[str, Any]] = None,
+    ) -> dict:
+        """
+        사용자 정보를 기반으로 GPT가 레시피 3개를 추천
+        
+        Args:
+            user: User 객체 (gender, age, weight, health_goal 포함)
+            user_request: 사용자의 최신 발화
+            llm_user_intent: LLM 프롬프트에 사용할 확장된 사용자 의도(없으면 user_request 사용)
+            conversation_history: 대화 히스토리 (선택사항)
+            diseases: 사용자의 질병 목록 (예: ["고지혈증", "고혈압"])
+            allergies: 사용자의 알레르기 목록
+            user_nickname: 사용자 닉네임 (메시지 생성용)
+            intent_metadata: 이전 단계에서 분석된 intent/risk 정보(JSON)
+        
+        Returns:
+            dict: {
+                "recommendations": [레시피 3개],
+                "health_warning": 건강 경고 메시지 (있으면),
+                "inferred_preference": 추론된 선호도 (시스템용),
+                "user_friendly_message": 사용자에게 보여줄 친화적 메시지
+            }
+        """
+        context = self._build_prompt_context(
+            user=user,
+            diseases=diseases,
+            allergies=allergies,
+            has_eaten_today=has_eaten_today,
+            deficient_nutrients=deficient_nutrients,
+            excess_warnings=excess_warnings,
+            meal_type=meal_type,
+        )
+        prompt = self._build_recipe_prompt(
+            user=user,
+            intent_text=llm_user_intent or user_request or "특별한 요청 없음",
+            context=context,
+            intent_metadata=intent_metadata,
+        )
 
         print("🤖 LangChain LLM에게 레시피 추천 요청 중...")
         
         chat_messages = [
             SystemMessage(content="당신은 전문 영양사이자 요리 전문가입니다. JSON 형식으로만 응답합니다.")
         ]
-        if conversation_history:
-            for msg in conversation_history:
-                if msg.get("role") == "assistant":
-                    chat_messages.append(AIMessage(content=msg.get("content", "")))
-                else:
-                    chat_messages.append(HumanMessage(content=msg.get("content", "")))
+        chat_messages.extend(self._prepare_conversation_messages(conversation_history))
         chat_messages.append(HumanMessage(content=prompt))
         
         response = await self.json_llm.ainvoke(chat_messages)
@@ -224,64 +409,75 @@ JSON 형식만 반환하세요. 다른 텍스트는 포함하지 마세요."""
                 excess_warnings=excess_warnings  # ✨ 초과 경고 전달
             )
             return default_result
-    
-    async def generate_conversational_reply(
+
+    async def quick_analyze_intent(
         self,
         user: User,
-        user_request: str,
+        intent_text: str,
         diseases: Optional[List[str]] = None,
         allergies: Optional[List[str]] = None,
-        health_context: str = "",
-        conversation_history: Optional[List[Dict[str, str]]] = None
-    ) -> str:
-        """레시피 호출 전 자연스러운 대화형 응답 생성"""
-        health_goal_kr = {
-            "loss": "체중 감량",
-            "maintain": "체중 유지",
-            "gain": "체중 증가"
-        }.get(user.health_goal, "체중 유지")
-        
-        disease_text = ", ".join(diseases or [])
-        allergy_text = ", ".join(allergies or [])
-        health_context_text = health_context or "오늘 기록을 참고해 건강을 챙겨드리고 싶어요."
-        
-        prompt = f"""당신은 사용자 건강 데이터를 알고 있는 한국어 영양사입니다.
+        has_eaten_today: bool = True,
+        deficient_nutrients: Optional[List[Dict[str, Any]]] = None,
+        excess_warnings: Optional[List[str]] = None,
+        meal_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """레시피 생성 전에 건강 경고 여부를 구조화해 반환"""
+        context = self._build_prompt_context(
+            user=user,
+            diseases=diseases,
+            allergies=allergies,
+            has_eaten_today=has_eaten_today,
+            deficient_nutrients=deficient_nutrients,
+            excess_warnings=excess_warnings,
+            meal_type=meal_type,
+        )
+        disease_list = ", ".join(diseases or []) or "없음"
+        allergy_list = ", ".join(allergies or []) or "없음"
+        prompt = f"""당신은 한국어 영양사입니다. 사용자의 요청을 검토해 건강상 위험 여부를 구조화해 판단하세요.
 
-**사용자 정보**
-- 성별: {'남성' if user.gender == 'M' else '여성' if user.gender == 'F' else '기타'}
-- 나이: {user.age or 30}세
-- 건강 목표: {health_goal_kr}
-- 질병/주의사항: {disease_text or '특이사항 없음'}
-- 알레르기: {allergy_text or '없음'}
-- 건강 맥락: {health_context_text}
+**사용자 요청**
+{intent_text or "특별한 요청 없음"}
 
-**사용자 발화**
-{user_request or '아직 입력 없음'}
+**건강 맥락**
+- 목표: {context.health_goal_label}
+{context.health_info_text}{context.excess_warnings_text or ""}
 
-**지침**
-1. 사용자의 기분과 요청에 공감하는 문장으로 시작하세요.
-2. 건강 데이터를 참고해 오늘 어울리는 메뉴 아이디어 1~2개를 제안하세요.
-3. \"레시피를 보여드릴까요?\" 또는 \"다른 도움이 필요하신가요?\"처럼 다음 행동을 자연스럽게 제안하세요.
-4. 3~4문장, 200자 이내로 친근하게 작성하세요.
-5. 아직 레시피를 제시하지 말고, 필요하면 보여줄 수 있다는 뉘앙스를 전달하세요."""
-        
-        chat_messages = [
-            SystemMessage(content="당신은 사용자의 건강 데이터를 이해하고 대화하는 한국어 상담형 영양사입니다.")
-        ]
-        if conversation_history:
-            for history in conversation_history:
-                role = history.get("role")
-                content = history.get("content", "")
-                if not content:
-                    continue
-                if role == "assistant":
-                    chat_messages.append(AIMessage(content=content))
-                else:
-                    chat_messages.append(HumanMessage(content=content))
-        chat_messages.append(HumanMessage(content=prompt))
-        
-        response = await self.chat_llm.ainvoke(chat_messages)
-        return response.content.strip()
+규칙:
+1. disease_conflict: 등록된 질병({disease_list})과 요청 메뉴가 충돌하면 true, 아니면 false.
+2. allergy_conflict: 등록된 알레르기({allergy_list})에 사용자가 요청한 재료가 포함되면 true, 아니면 false.
+3. health_warning: 위험 요인을 한국어 한 문장으로 설명. 둘 다 false면 null.
+4. user_message: 공감형 안내 1~2문장.
+5. JSON만 출력하고 불리언은 true/false로 표현하세요.
+
+예시:
+{{
+  "disease_conflict": true,
+  "allergy_conflict": false,
+  "health_warning": "고혈압이 있어 나트륨 많은 음식은 주의해주세요.",
+  "user_message": "좋아하시는 메뉴를 더 건강하게 즐길 수 있도록 도와드릴게요!"
+}}"""
+
+        try:
+            response = await self.json_llm.ainvoke(
+                [
+                    SystemMessage(content="당신은 엄격하지만 친절한 한국어 영양사입니다. JSON으로만 응답하세요."),
+                    HumanMessage(content=prompt),
+                ]
+            )
+            parsed = json.loads(response.content)
+            return {
+                "disease_conflict": bool(parsed.get("disease_conflict")),
+                "allergy_conflict": bool(parsed.get("allergy_conflict")),
+                "health_warning": parsed.get("health_warning"),
+                "user_message": parsed.get("user_message"),
+            }
+        except Exception:
+            return {
+                "disease_conflict": False,
+                "allergy_conflict": False,
+                "health_warning": None,
+                "user_message": "말씀해주신 내용을 참고해 레시피를 찾아볼게요!",
+            }
     
     async def decide_recipe_tool(
         self,
@@ -306,6 +502,8 @@ JSON 형식만 반환하세요. 다른 텍스트는 포함하지 마세요."""
 - call_tool이 true이면 즉시 레시피 카드를 보여주는 것이 좋다고 확신한 경우입니다.
 - false이면 아직 상담이나 추가 질문이 필요하다고 판단한 경우이며, assistant_reply에 자연스러운 후속 질문 또는 제안을 작성하세요.
 - meal_type은 사용자가 언급했다면 breakfast/lunch/dinner/snack 중 하나로 추측하고, 모르겠으면 null로 두세요.
+- intent_summary는 사용자의 확정된 의도를 1문장으로 요약하세요.
+- risk_flags는 ["high_sodium", "late_snack"] 처럼 건강상 주의가 필요한 신호를 짧게 담으세요. 없으면 빈 배열을 유지하세요.
 - suggestions 배열에는 해당 단계에서 사용자가 실제로 누를 수 있는 2~3개의 짧은 한국어 문장을 넣으세요.
   - call_tool=false: 추가 정보 요청/확인과 관련된 문장만 넣고, 레시피를 바로 보여달라는 문장은 피하세요.
   - call_tool=true인데 meal_type=null: 아침/점심/저녁/간식 중 선택하거나 더 필요한 정보를 말하도록 유도하세요.
@@ -317,6 +515,8 @@ JSON 형식만 반환하세요. 다른 텍스트는 포함하지 마세요."""
   "call_tool": false,
   "assistant_reply": "오리고기와 닭고기 중 어떤 게 더 끌리시나요?",
   "meal_type": null,
+  "intent_summary": "사용자가 구체적인 단백질 메뉴 비교를 원함",
+  "risk_flags": [],
   "suggestions": ["닭고기 레시피 말해줘", "다른 재료 알려줄게"]
 }}
 
@@ -341,12 +541,18 @@ JSON 형식만 반환하세요. 다른 텍스트는 포함하지 마세요."""
             suggestions = parsed.get("suggestions")
             if not isinstance(suggestions, list):
                 parsed["suggestions"] = []
+            if "intent_summary" not in parsed:
+                parsed["intent_summary"] = user_request or ""
+            if "risk_flags" not in parsed or not isinstance(parsed["risk_flags"], list):
+                parsed["risk_flags"] = []
             return parsed
         except json.JSONDecodeError:
             return {
                 "call_tool": False,
                 "assistant_reply": "조금 더 자세히 말씀해주시면 도와드릴게요!",
                 "meal_type": None,
+                "intent_summary": user_request or "",
+                "risk_flags": [],
                 "suggestions": ["아침인지 알려줄게", "식사 목적을 설명할게"]
             }
 
@@ -847,6 +1053,10 @@ JSON 형식:
 
 JSON 형식만 반환하세요."""
 
+        cached = self._get_prefetched_detail(user, recipe_name)
+        if cached:
+            return cached
+
         print(f"🤖 LangChain LLM에게 '{recipe_name}' 레시피 상세 요청 중...")
         
         chat_messages = [
@@ -861,11 +1071,14 @@ JSON 형식만 반환하세요."""
         try:
             result = json.loads(gpt_response)
             result["total_steps"] = len(result.get("steps", []))
+            self._store_prefetched_detail(user, recipe_name, result)
             return result
         except json.JSONDecodeError as e:
             print(f"❌ JSON 파싱 오류: {e}")
             # 파싱 실패 시 기본 레시피 반환
-            return self._get_fallback_recipe(recipe_name)
+            fallback = self._get_fallback_recipe(recipe_name)
+            self._store_prefetched_detail(user, recipe_name, fallback)
+            return fallback
     
     def _get_fallback_recipe(self, recipe_name: str) -> dict:
         """JSON 파싱 실패 시 기본 레시피 반환"""
@@ -924,6 +1137,39 @@ JSON 형식만 반환하세요."""
                 "sodium": "800mg"
             }
         }
+
+    def _store_prefetched_detail(self, user: User, recipe_name: str, payload: Dict[str, Any]) -> None:
+        key = self._detail_cache_key(user, recipe_name)
+        if not key:
+            return
+        self._prefetched_detail_cache[key] = {
+            "expires_at": time.time() + DETAIL_CACHE_TTL_SECONDS,
+            "data": payload,
+        }
+
+    def _get_prefetched_detail(self, user: User, recipe_name: str) -> Optional[Dict[str, Any]]:
+        key = self._detail_cache_key(user, recipe_name)
+        if not key:
+            return None
+        entry = self._prefetched_detail_cache.get(key)
+        if not entry:
+            return None
+        if entry["expires_at"] < time.time():
+            self._prefetched_detail_cache.pop(key, None)
+            return None
+        return entry["data"]
+
+    def _detail_cache_key(self, user: User, recipe_name: str) -> Optional[tuple[int, str]]:
+        if not user or not getattr(user, "user_id", None) or not recipe_name:
+            return None
+        return (user.user_id, recipe_name.strip().lower())
+
+    @staticmethod
+    def _silence_background_task(task: asyncio.Task) -> None:
+        try:
+            task.result()
+        except Exception:
+            pass
 
 
 # 싱글톤 인스턴스
