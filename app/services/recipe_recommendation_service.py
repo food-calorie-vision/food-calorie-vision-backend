@@ -1,6 +1,8 @@
 """레시피 추천 서비스 - LangChain 기반 개인화 레시피 추천 및 단계별 조리법"""
+import asyncio
 import json
 import re
+import time
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any
 
@@ -10,6 +12,7 @@ from app.core.config import get_settings
 from app.db.models import User
 
 settings = get_settings()
+DETAIL_CACHE_TTL_SECONDS = 300
 
 
 @dataclass
@@ -21,6 +24,33 @@ class RecipePromptContext:
     today_status_text: str
     excess_warnings_text: str
     meal_type_text: str
+
+
+@dataclass
+class RecipePipelineTasks:
+    """병렬로 실행되는 레시피 관련 LangChain 작업 묶음."""
+
+    health_analysis_task: Optional[asyncio.Task]
+    recommendation_task: asyncio.Task
+    detail_prefetch_task: Optional[asyncio.Task] = None
+
+    async def get_health_analysis(self) -> Optional[Dict[str, Any]]:
+        if not self.health_analysis_task:
+            return None
+        return await self.health_analysis_task
+
+    async def get_recommendations(self) -> Dict[str, Any]:
+        return await self.recommendation_task
+
+    async def get_prefetched_details(self) -> Dict[str, Any]:
+        if not self.detail_prefetch_task:
+            return {}
+        return await self.detail_prefetch_task
+
+    def cancel_pending(self) -> None:
+        for task in (self.health_analysis_task, self.recommendation_task, self.detail_prefetch_task):
+            if task and not task.done():
+                task.cancel()
 
 
 class RecipeRecommendationService:
@@ -40,6 +70,7 @@ class RecipeRecommendationService:
             temperature=0.4,
             model_kwargs={"response_format": {"type": "json_object"}}
         )
+        self._prefetched_detail_cache: Dict[tuple[int, str], Dict[str, Any]] = {}
 
     def _build_prompt_context(
         self,
@@ -189,7 +220,72 @@ class RecipeRecommendationService:
 
 JSON 형식만 반환하세요. 다른 텍스트는 포함하지 마세요."""
         return prompt
-    
+
+    def launch_parallel_recipe_pipeline(
+        self,
+        *,
+        recommendation_kwargs: Dict[str, Any],
+        health_check_kwargs: Optional[Dict[str, Any]] = None,
+        prefetch_detail_limit: int = 0,
+    ) -> RecipePipelineTasks:
+        """레시피 추천/건강 분석/상세 조리법 생성을 병렬로 준비."""
+
+        try:
+            user_for_detail = recommendation_kwargs["user"]
+        except KeyError as exc:  # pragma: no cover - guardrail
+            raise ValueError("recommendation_kwargs must include 'user'") from exc
+
+        loop = asyncio.get_running_loop()
+
+        recommendation_task = loop.create_task(
+            self.get_recipe_recommendations(**recommendation_kwargs)
+        )
+
+        health_task = (
+            loop.create_task(self.quick_analyze_intent(**health_check_kwargs))
+            if health_check_kwargs
+            else None
+        )
+
+        detail_task: Optional[asyncio.Task] = None
+        if prefetch_detail_limit > 0:
+            async def _prefetch_details() -> Dict[str, Any]:
+                try:
+                    payload = await recommendation_task
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    return {}
+
+                recipes = (payload.get("recommendations") or [])[:prefetch_detail_limit]
+                recipe_names = [rec.get("name") for rec in recipes if rec.get("name")]
+                if not recipe_names:
+                    return {}
+
+                detail_results = await asyncio.gather(
+                    *[
+                        self.get_recipe_detail(recipe_name=name, user=user_for_detail)
+                        for name in recipe_names
+                    ],
+                    return_exceptions=True,
+                )
+                details: Dict[str, Any] = {}
+                for name, result in zip(recipe_names, detail_results):
+                    if isinstance(result, Exception):
+                        continue
+                    details[name] = result
+                    self._store_prefetched_detail(user_for_detail, name, result)
+                return details
+
+            detail_task = loop.create_task(_prefetch_details())
+            detail_task.add_done_callback(self._silence_background_task)
+
+        return RecipePipelineTasks(
+            health_analysis_task=health_task,
+            recommendation_task=recommendation_task,
+            detail_prefetch_task=detail_task,
+        )
+
     async def get_recipe_recommendations(
         self,
         user: User,
@@ -957,6 +1053,10 @@ JSON 형식:
 
 JSON 형식만 반환하세요."""
 
+        cached = self._get_prefetched_detail(user, recipe_name)
+        if cached:
+            return cached
+
         print(f"🤖 LangChain LLM에게 '{recipe_name}' 레시피 상세 요청 중...")
         
         chat_messages = [
@@ -971,11 +1071,14 @@ JSON 형식만 반환하세요."""
         try:
             result = json.loads(gpt_response)
             result["total_steps"] = len(result.get("steps", []))
+            self._store_prefetched_detail(user, recipe_name, result)
             return result
         except json.JSONDecodeError as e:
             print(f"❌ JSON 파싱 오류: {e}")
             # 파싱 실패 시 기본 레시피 반환
-            return self._get_fallback_recipe(recipe_name)
+            fallback = self._get_fallback_recipe(recipe_name)
+            self._store_prefetched_detail(user, recipe_name, fallback)
+            return fallback
     
     def _get_fallback_recipe(self, recipe_name: str) -> dict:
         """JSON 파싱 실패 시 기본 레시피 반환"""
@@ -1034,6 +1137,39 @@ JSON 형식만 반환하세요."""
                 "sodium": "800mg"
             }
         }
+
+    def _store_prefetched_detail(self, user: User, recipe_name: str, payload: Dict[str, Any]) -> None:
+        key = self._detail_cache_key(user, recipe_name)
+        if not key:
+            return
+        self._prefetched_detail_cache[key] = {
+            "expires_at": time.time() + DETAIL_CACHE_TTL_SECONDS,
+            "data": payload,
+        }
+
+    def _get_prefetched_detail(self, user: User, recipe_name: str) -> Optional[Dict[str, Any]]:
+        key = self._detail_cache_key(user, recipe_name)
+        if not key:
+            return None
+        entry = self._prefetched_detail_cache.get(key)
+        if not entry:
+            return None
+        if entry["expires_at"] < time.time():
+            self._prefetched_detail_cache.pop(key, None)
+            return None
+        return entry["data"]
+
+    def _detail_cache_key(self, user: User, recipe_name: str) -> Optional[tuple[int, str]]:
+        if not user or not getattr(user, "user_id", None) or not recipe_name:
+            return None
+        return (user.user_id, recipe_name.strip().lower())
+
+    @staticmethod
+    def _silence_background_task(task: asyncio.Task) -> None:
+        try:
+            task.result()
+        except Exception:
+            pass
 
 
 # 싱글톤 인스턴스

@@ -423,21 +423,30 @@ async def get_recipe_recommendations(
                 "intent_summary": decision_intent_summary,
                 "risk_flags": decision_risk_flags
             }
-        result_data = await recipe_service.get_recipe_recommendations(
-            user=user,
-            user_request=request.user_request or "",
-            llm_user_intent=final_intent_text,
-            conversation_history=request.conversation_history,
-            diseases=diseases if diseases else None,
-            allergies=allergies if allergies else None,
-            user_nickname=user.nickname or user.username,
-            has_eaten_today=has_eaten_today,
-            deficient_nutrients=deficient_nutrients if deficient_nutrients else None,
-            meal_type=combined_meal_type,
-            excess_warnings=excess_warnings,  # ✨ 초과 경고 전달
-            intent_metadata=intent_metadata
+
+        recommendation_kwargs = {
+            "user": user,
+            "user_request": request.user_request or "",
+            "llm_user_intent": final_intent_text,
+            "conversation_history": request.conversation_history,
+            "diseases": diseases if diseases else None,
+            "allergies": allergies if allergies else None,
+            "user_nickname": user.nickname or user.username,
+            "has_eaten_today": has_eaten_today,
+            "deficient_nutrients": deficient_nutrients if deficient_nutrients else None,
+            "meal_type": combined_meal_type,
+            "excess_warnings": excess_warnings,
+            "intent_metadata": intent_metadata,
+        }
+
+        pipeline_tasks = recipe_service.launch_parallel_recipe_pipeline(
+            recommendation_kwargs=recommendation_kwargs,
+            health_check_kwargs=None,
+            prefetch_detail_limit=2,
         )
-        
+
+        result_data = await pipeline_tasks.get_recommendations()
+
         print(f"[Recommend] Phase-1 카드 추천 완료 user={user.user_id}, count={len(result_data.get('recommendations', []))}")
         
         health_warning_text = result_data.get("health_warning")
