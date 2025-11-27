@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     api_prefix: str = "/api"
     api_version: str = "v1"
     port: int = 8000
-    database_url: str = "mysql+asyncmy://root:dufdjwnj@10.43.40.99:3306/tempdb"
+    database_url: str
     cors_allow_origins: list[str] = ["http://localhost:3000"]
     
     # Session settings
@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     
     # AI/ML Settings
     openai_api_key: str | None = None  # OpenAI API Key
-    vision_model_path: str | None = "models/yolo11n.pt"
+    vision_model_path: str | None = "models/yolo_food.pt"
 
     @field_validator("cors_allow_origins", mode="before")
     @classmethod
