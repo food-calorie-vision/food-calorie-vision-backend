@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     
     # AI/ML Settings
     openai_api_key: str | None = None  # OpenAI API Key
-    vision_model_path: str | None = "models/yolo11n.pt"
+    vision_model_path: str | None = "models/yolo_food.pt"
 
     @field_validator("cors_allow_origins", mode="before")
     @classmethod
