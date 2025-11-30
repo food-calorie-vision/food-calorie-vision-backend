@@ -17,8 +17,8 @@ class FoodNutrient(Base):
     representative_food_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, comment='대표식품명')
     food_class1: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     food_class2: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    unit: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    reference_value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # 영양성분함량기준 (g)
+    unit: Mapped[Optional[float]] = mapped_column(Float, nullable=True, comment='식품 중량 (g)')
+    reference_value: Mapped[Optional[float]] = mapped_column(Float, nullable=True, comment='영양성분함량기준량 (g, 항상 100)')
     
     # 주요 영양소
     protein: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -42,6 +42,7 @@ class FoodNutrient(Base):
     # 기타
     carb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     fat: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    kcal: Mapped[Optional[float]] = mapped_column(Float, nullable=True, comment='칼로리 (kcal)')
 
     def __repr__(self) -> str:
         return f"<FoodNutrient(food_id={self.food_id}, nutrient_name={self.nutrient_name})>"

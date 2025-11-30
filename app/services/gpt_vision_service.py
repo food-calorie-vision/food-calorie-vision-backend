@@ -143,10 +143,12 @@ class GPTVisionService:
         
         prompt = f"""당신은 영양 전문가입니다. 이미지 속 음식을 분석하여 다음 정보를 제공해주세요.
 
-**YOLO 모델 detection 결과:**
+**YOLO 모델 detection 결과 (참고용):**
 {yolo_summary}{objects_detail}
+⚠️ YOLO 결과는 참고만 하세요. 이미지를 직접 분석하여 최종 판단하세요.
+   YOLO가 "죽류"라고 했어도, 이미지에서 실제로 보이는 음식을 우선시하세요.
 
-위 detection 결과를 참고하여 이미지를 분석하고, 다음 형식으로 **정확하게** 답변해주세요:
+위 detection 결과를 **힌트로만 활용**하고, 이미지를 직접 분석하여 다음 형식으로 **정확하게** 답변해주세요:
 
 ---
 **가장 가능성 높은 음식 (신뢰도 순위 1~4위)**
@@ -368,8 +370,9 @@ class GPTVisionService:
             image_size_kb = len(image_bytes) / 1024
             print(f"📊 원본 이미지 크기: {image_size_kb:.2f} KB")
             
-            # 이미지가 500KB 이상이면 압축 (OpenAI 권장: 20MB 이하, 하지만 작을수록 좋음)
-            if image_size_kb > 500:  # 500KB
+            # 이미지가 1MB 이상이면 압축 (OpenAI 권장: 20MB 이하)
+            # 압축 기준을 완화하여 이미지 품질 유지
+            if image_size_kb > 1000:  # 1MB
                 print(f"⚠️ 이미지가 큽니다 ({image_size_kb:.2f} KB). 압축 중...")
                 from PIL import Image
                 import io
@@ -378,17 +381,19 @@ class GPTVisionService:
                 img = Image.open(io.BytesIO(image_bytes))
                 original_size = img.size
                 
-                # 최대 1024px로 리사이즈
-                max_size = 1024
+                # 최대 1536px로 리사이즈 (기존 1024px에서 증가)
+                # 더 큰 이미지로 세부 사항 보존
+                max_size = 1536
                 if max(img.size) > max_size:
                     ratio = max_size / max(img.size)
                     new_size = tuple(int(dim * ratio) for dim in img.size)
                     img = img.resize(new_size, Image.Resampling.LANCZOS)
                     print(f"🔧 이미지 리사이즈: {original_size} → {new_size}")
                 
-                # JPEG로 압축 (품질 85)
+                # JPEG로 압축 (품질 90으로 향상)
+                # 높은 품질로 GPT Vision이 세부 사항 인식 가능
                 compressed_buffer = io.BytesIO()
-                img.convert('RGB').save(compressed_buffer, format='JPEG', quality=85)
+                img.convert('RGB').save(compressed_buffer, format='JPEG', quality=90)
                 image_bytes = compressed_buffer.getvalue()
                 
                 compressed_size_kb = len(image_bytes) / 1024
@@ -552,17 +557,20 @@ class GPTVisionService:
         
         prompt = f"""당신은 음식 분류 전문가입니다. 이미지 속 음식의 대분류를 판단하세요.
 
-**YOLO 객체 감지 결과:**
+**YOLO 객체 감지 결과 (참고용):**
 {yolo_summary}
+⚠️ YOLO 결과는 참고만 하세요. 이미지를 직접 분석하여 최종 판단하세요.
+   YOLO가 틀릴 수 있으므로, 이미지에서 실제로 보이는 것을 우선시하세요.
 
 **참고할 대분류 목록:**
 {classes_formatted}
 
 **지시사항:**
-1. 이미지를 분석하여 음식을 식별하세요.
-2. 위 목록에서 가장 가까운 대분류를 선택하세요.
+1. **이미지를 직접 분석**하여 음식을 식별하세요.
+2. YOLO 결과는 힌트로만 활용하고, 이미지 분석 결과를 우선하세요.
+3. 위 목록에서 가장 가까운 대분류를 선택하세요.
 {safety_instruction}
-4. 음식이 명확하다면 반드시 아래 형식으로 답변하세요:
+5. 음식이 명확하다면 반드시 아래 형식으로 답변하세요:
 
 ---
 선택한 대분류: [대분류명]
