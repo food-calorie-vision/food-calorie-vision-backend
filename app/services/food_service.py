@@ -72,7 +72,14 @@ async def get_or_create_food(
     existing_food = result.scalar_one_or_none()
     
     if existing_food:
-        print(f"✅ 기존 Food 발견: {food_id}")
+        # 기존 음식명과 다르면 경고 (food_nutrients 매칭 오류 가능성)
+        if existing_food.food_name != food_name:
+            print(f"⚠️ 경고: 같은 food_id ({food_id})에 다른 음식명!")
+            print(f"   기존: {existing_food.food_name}")
+            print(f"   요청: {food_name}")
+            print(f"   → 음식 매칭 서비스 오류 가능성!")
+        else:
+            print(f"✅ 기존 Food 발견: {food_id}")
         return existing_food
     
     # 새로운 음식 생성

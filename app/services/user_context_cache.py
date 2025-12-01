@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, date, timedelta
 from typing import Dict, List
+import logging
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -58,8 +59,10 @@ async def get_or_build_user_context(session: AsyncSession, user_id: int) -> Cach
     cached = _CACHE.get(user_id)
     now = datetime.utcnow()
     if cached and now - cached.last_refreshed < _TTL:
+        logging.info("==캐시된 사용자 컨텍스트 재사용==\nuser_id=%s 질병=%s 알레르기=%s", user_id, cached.diseases, cached.allergies)
         return cached
 
+    logging.info("==DB에서 사용자 컨텍스트 새로 조회==\nuser_id=%s", user_id)
     refreshed = await _fetch_user_context(session, user_id)
     _CACHE[user_id] = refreshed
     return refreshed
@@ -75,4 +78,3 @@ async def refresh_user_context(session: AsyncSession, user_id: int) -> CachedUse
 def invalidate_user_context(user_id: int) -> None:
     """로그아웃 등에서 캐시를 제거."""
     _CACHE.pop(user_id, None)
-

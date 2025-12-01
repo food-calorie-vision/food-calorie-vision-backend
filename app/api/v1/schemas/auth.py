@@ -21,7 +21,7 @@ class SignupRequest(BaseModel):
     health_goal: Literal['gain', 'maintain', 'loss'] = Field(default="maintain", description="건강 목표 (gain/maintain/loss)")
     
     allergies: Optional[str] = Field(None, description="알레르기 정보 (콤마로 구분된 문자열)")
-    diseases: Optional[str] = Field(None, description="기저질환 정보 (콤마로 구분된 문자열)")
+    diseases: Optional[str] = Field(None, description="기저 정보 (콤마로 구분된 문자열)")
     
     @field_validator('gender')
     @classmethod

@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -8,6 +10,26 @@ load_dotenv()
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
+
+
+def configure_sqlalchemy_logging() -> None:
+    """Format SQLAlchemy engine logs with extra spacing for readability."""
+    sql_logger = logging.getLogger("sqlalchemy.engine")
+    sql_logger.setLevel(logging.INFO)
+    sql_logger.handlers.clear()
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s\n%(message)s\n",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+    sql_logger.addHandler(handler)
+    sql_logger.propagate = False
+
+
+configure_sqlalchemy_logging()
 
 settings = get_settings()
 

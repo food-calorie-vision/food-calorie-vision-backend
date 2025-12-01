@@ -24,6 +24,7 @@ from app.services.yolo_service import get_yolo_service
 from app.services.food_nutrients_service import get_best_match_for_food
 from app.services.food_service import get_or_create_food
 from app.services.food_history_service import create_food_history
+from app.utils.food_name import extract_display_name
 
 router = APIRouter()
 
@@ -308,10 +309,13 @@ async def analyze_food_image_with_yolo_gpt(
         # 7. 응답 데이터 구성
         from app.api.v1.schemas.vision import FoodCandidate
         
+        # 메인 음식명에서 표시용 이름 추출 (언더스코어 뒤 부분만)
+        display_food_name = extract_display_name(gpt_result["food_name"])
+        
         # 후보 음식 리스트 변환
         candidates = [
             FoodCandidate(
-                foodName=c["food_name"],
+                foodName=extract_display_name(c["food_name"]),  # 후보 음식명도 표시용으로 변환
                 confidence=c["confidence"],
                 description=c.get("description", ""),
                 ingredients=c.get("ingredients", [])  # 후보별 재료 추가
@@ -320,7 +324,7 @@ async def analyze_food_image_with_yolo_gpt(
         ]
         
         analysis_result = FoodAnalysisResult(
-            foodName=gpt_result["food_name"],
+            foodName=display_food_name,  # 표시용 이름 사용
             description=gpt_result.get("description", ""),
             ingredients=gpt_result["ingredients"],
             calories=calories,
@@ -341,7 +345,7 @@ async def analyze_food_image_with_yolo_gpt(
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 processingTime=processing_time,
             ),
-            message=f"✅ 분석 완료: {gpt_result['food_name']} (건강점수: {gpt_result.get('health_score', 0)}점)"
+            message=f"✅ 분석 완료: {display_food_name} (건강점수: {gpt_result.get('health_score', 0)}점)"
         )
         
     except RuntimeError as e:
@@ -453,7 +457,7 @@ async def reanalyze_with_user_selection(
             # 폴백 사용 시 안내 메시지
             suggestions = []
             if is_fallback and fallback_category:
-                fallback_message = f"ℹ️ '{request.selected_food_name}'의 정확한 영양 정보가 없어 '{fallback_category}' 기준으로 표시됩니다."
+                fallback_message = f"ℹ️ '{display_food_name}'의 정확한 영양 정보가 없어 '{fallback_category}' 기준으로 표시됩니다."
                 suggestions.append(fallback_message)
             
             suggestions.extend([
@@ -476,8 +480,9 @@ async def reanalyze_with_user_selection(
             ]
         
         # 4. 응답 데이터 구성
+        display_food_name = extract_display_name(request.selected_food_name)
         analysis_result = FoodAnalysisResult(
-            foodName=request.selected_food_name,
+            foodName=display_food_name,  # 표시용 이름 사용
             description="",
             ingredients=request.ingredients or [],
             calories=calories,
@@ -498,7 +503,7 @@ async def reanalyze_with_user_selection(
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 processingTime=processing_time,
             ),
-            message=f"✅ 재분석 완료: {request.selected_food_name}"
+            message=f"✅ 재분석 완료: {display_food_name}"
         )
         
     except Exception as e:
@@ -603,8 +608,8 @@ async def save_user_food(
             print(f"   - 신뢰도: {nutrition_result['confidence']}%")
             
             actual_food_id = f"USER_{request.user_id}_{int(datetime.now().timestamp())}"[:200]
-            actual_food_class_1 = request.food_class_1 or "사용자추가"
-            actual_food_class_2 = request.food_class_2 or (request.ingredients[0] if request.ingredients else None)
+            actual_food_class_1 = request.food_class_1 or (estimated_nutrients['food_class1'] if estimated_nutrients else "사용자추가")
+            actual_food_class_2 = request.food_class_2 or (estimated_nutrients['food_class2'] if estimated_nutrients else (request.ingredients[0] if request.ingredients else None))
             
             # user_contributed_foods에 추가 (LangChain 추정값 사용)
             new_contributed_food = UserContributedFood(
