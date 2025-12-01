@@ -160,31 +160,43 @@ async def analyze_food_image_with_yolo_gpt(
         yolo_result = yolo_service.detect_food(image_bytes)
         print(f"✅ YOLO detection 완료: {yolo_result['summary']}")
         
-        # 3. GPT-Vision 2단계 분석 실행 (DB 대분류 → GPT → DB 음식 목록 → GPT)
-        print("🤖 GPT-Vision 2단계 분석 시작...")
+        # 3. GPT-Vision 간단 분석 (음식명 + 재료 추출)
+        print("🤖 GPT-Vision 분석 시작...")
         gpt_service = get_gpt_vision_service()
-        gpt_result = await gpt_service.analyze_food_with_db_guidance(
+        gpt_result = gpt_service.analyze_food_with_detection(
             image_bytes, 
-            yolo_result,
-            session  # DB 세션 전달
+            yolo_result
         )
         print(f"✅ GPT-Vision 분석 완료: {gpt_result['food_name']}")
         print(f"📝 추출된 재료: {', '.join(gpt_result['ingredients'])}")
         
-        # 4. food_id로 정확한 영양소 데이터 조회
-        print("🔍 DB에서 영양소 데이터 조회 중...")
-        if gpt_result.get("food_id"):
-            # GPT가 food_id를 반환한 경우 (2단계 방식 성공)
-            from app.services.food_nutrients_service import get_food_by_id
-            food_nutrient = await get_food_by_id(session, gpt_result["food_id"])
-            print(f"✅ DB 매칭 성공 (food_id 사용): {gpt_result['food_id']}")
-        else:
-            # 폴백: 기존 방식 (이름 기반 검색)
-            food_nutrient = await get_best_match_for_food(
-                session,
-                food_name=gpt_result["food_name"],
-                ingredients=gpt_result["ingredients"]
+        # 4. LangChain으로 DB 조회 (전체 로직 위임)
+        print("🔍 [LangChain] DB에서 음식 검색 중...")
+        from app.services.food_db_finder import get_food_db_finder
+        
+        food_nutrient = None
+        langchain_match_result = None
+        
+        # LangChain으로 의미 기반 매칭 시도
+        try:
+            db_finder = get_food_db_finder()
+            langchain_match_result = await db_finder.find_exact_match(
+                detected_food_name=gpt_result["food_name"],
+                session=session
             )
+            
+            if langchain_match_result["found"] and langchain_match_result["confidence"] >= 80:
+                food_nutrient = langchain_match_result["food_data"]
+                print(f"✅ [LangChain] 매칭 성공: {food_nutrient.nutrient_name} (신뢰도: {langchain_match_result['confidence']}%)")
+            else:
+                print(f"⚠️ [LangChain] 매칭 실패 (신뢰도: {langchain_match_result.get('confidence', 0)}%)")
+                print(f"📝 [LangChain] 이유: {langchain_match_result.get('reason', 'Unknown')}")
+                # 매칭 실패 시 food_nutrient는 None으로 유지
+        except Exception as e:
+            print(f"❌ [LangChain] 오류 발생: {e}")
+            import traceback
+            traceback.print_exc()
+            # 오류 발생 시에도 food_nutrient는 None으로 유지
         
         # 4-1. 매칭 실패 시 대분류 기반 폴백 시도
         is_fallback = False
@@ -215,16 +227,23 @@ async def analyze_food_image_with_yolo_gpt(
             if not is_fallback:
                 print(f"✅ DB 매칭 성공: {food_nutrient.nutrient_name}")
             
-            # 칼로리 계산 (Atwater 시스템: 단백질 4kcal/g, 탄수화물 4kcal/g, 지방 9kcal/g)
-            protein_cal = (food_nutrient.protein or 0.0) * 4
-            carb_cal = (food_nutrient.carb or 0.0) * 4
-            fat_cal = (food_nutrient.fat or 0.0) * 9
-            calories = round(protein_cal + carb_cal + fat_cal)
+            # 칼로리 계산: DB의 kcal 우선, 없으면 Atwater 공식 사용
+            reference = food_nutrient.reference_value or 100.0
+            
+            if food_nutrient.kcal is not None and food_nutrient.kcal > 0:
+                # DB에 kcal 정보가 있으면 사용
+                calories = round(food_nutrient.kcal)
+                print(f"✅ DB 칼로리 사용: {calories} kcal (per {reference}g)")
+            else:
+                # DB에 kcal 없으면 Atwater 공식으로 계산
+                protein_cal = (food_nutrient.protein or 0.0) * 4
+                carb_cal = (food_nutrient.carb or 0.0) * 4
+                fat_cal = (food_nutrient.fat or 0.0) * 9
+                calories = round(protein_cal + carb_cal + fat_cal)
+                print(f"🔢 Atwater 공식 계산: {protein_cal:.1f} + {carb_cal:.1f} + {fat_cal:.1f} = {calories} kcal (per {reference}g)")
             
             # 영양성분함량기준 정보 출력
-            reference = food_nutrient.reference_value or 100.0
             print(f"📊 영양소 정보 ({reference}g 기준): 단백질={food_nutrient.protein}g, 탄수화물={food_nutrient.carb}g, 지방={food_nutrient.fat}g")
-            print(f"🔢 칼로리 계산: {protein_cal:.1f} + {carb_cal:.1f} + {fat_cal:.1f} = {calories} kcal (per {reference}g)")
             
             nutrients = FoodNutrients(
                 protein=float(food_nutrient.protein or 0.0),
@@ -238,16 +257,50 @@ async def analyze_food_image_with_yolo_gpt(
             if is_fallback and fallback_category:
                 fallback_message = f"ℹ️ '{gpt_result['food_name']}'의 정확한 영양 정보가 없어 '{fallback_category}' 기준으로 표시됩니다."
         else:
-            print("⚠️ DB 매칭 완전 실패: 기본값 사용")
-            calories = 0
-            nutrients = FoodNutrients(
-                protein=0.0,
-                carbs=0.0,
-                fat=0.0,
-                sodium=0.0,
-                fiber=0.0
-            )
-            fallback_message = "⚠️ 이 음식의 영양 정보가 데이터베이스에 없습니다. 유사한 음식을 참고하세요."
+            # DB 매칭 완전 실패 → LangChain으로 영양성분 추정
+            print("⚠️ DB 매칭 완전 실패 → LangChain으로 영양성분 추정 시도")
+            
+            try:
+                db_finder = get_food_db_finder()
+                nutrition_result = await db_finder.estimate_nutrition_without_db(
+                    food_name=gpt_result["food_name"],
+                    ingredients=gpt_result["ingredients"],
+                    portion_size_g=250.0  # 기본 1인분 추정
+                )
+                
+                print(f"✅ [LangChain] 영양성분 추정 완료:")
+                print(f"   - 칼로리: {nutrition_result['calories']} kcal")
+                print(f"   - 단백질: {nutrition_result['protein']}g")
+                print(f"   - 탄수화물: {nutrition_result['carbs']}g")
+                print(f"   - 지방: {nutrition_result['fat']}g")
+                print(f"   - 신뢰도: {nutrition_result['confidence']}%")
+                print(f"   - 추정 근거: {nutrition_result['estimation_note']}")
+                
+                calories = int(nutrition_result['calories'])
+                nutrients = FoodNutrients(
+                    protein=nutrition_result['protein'],
+                    carbs=nutrition_result['carbs'],
+                    fat=nutrition_result['fat'],
+                    sodium=nutrition_result['sodium'],
+                    fiber=nutrition_result['fiber']
+                )
+                fallback_message = f"🤖 AI가 영양성분을 추정했습니다 (신뢰도: {nutrition_result['confidence']}%). 참고용으로 활용하세요."
+                
+            except Exception as e:
+                print(f"❌ [LangChain] 영양성분 추정 실패: {e}")
+                import traceback
+                traceback.print_exc()
+                
+                # 최종 폴백: 기본값
+                calories = 0
+                nutrients = FoodNutrients(
+                    protein=0.0,
+                    carbs=0.0,
+                    fat=0.0,
+                    sodium=0.0,
+                    fiber=0.0
+                )
+                fallback_message = "⚠️ 이 음식의 영양 정보가 데이터베이스에 없습니다. 유사한 음식을 참고하세요."
         
         # 6. 폴백 메시지를 suggestions 맨 앞에 삽입
         if fallback_message:
@@ -375,17 +428,23 @@ async def reanalyze_with_user_selection(
             if not is_fallback:
                 print(f"✅ DB 매칭 성공: {food_nutrient.nutrient_name}")
             
-            # 표시용 음식명 추출 (언더스코어 뒤 부분만)
-            display_food_name = extract_display_name(request.selected_food_name)
-            
-            protein_cal = (food_nutrient.protein or 0.0) * 4
-            carb_cal = (food_nutrient.carb or 0.0) * 4
-            fat_cal = (food_nutrient.fat or 0.0) * 9
-            calories = round(protein_cal + carb_cal + fat_cal)
-            
+            # 칼로리 계산: DB의 kcal 우선, 없으면 Atwater 공식 사용
             reference = food_nutrient.reference_value or 100.0
+            
+            if food_nutrient.kcal is not None and food_nutrient.kcal > 0:
+                # DB에 kcal 정보가 있으면 사용
+                calories = round(food_nutrient.kcal)
+                print(f"✅ DB 칼로리 사용: {calories} kcal (per {reference}g)")
+            else:
+                # DB에 kcal 없으면 Atwater 공식으로 계산
+                protein_cal = (food_nutrient.protein or 0.0) * 4
+                carb_cal = (food_nutrient.carb or 0.0) * 4
+                fat_cal = (food_nutrient.fat or 0.0) * 9
+                calories = round(protein_cal + carb_cal + fat_cal)
+                print(f"🔢 Atwater 공식 계산: {protein_cal:.1f} + {carb_cal:.1f} + {fat_cal:.1f} = {calories} kcal (per {reference}g)")
+            
+            # 영양성분함량기준 정보 출력
             print(f"📊 영양소 정보 ({reference}g 기준): 단백질={food_nutrient.protein}g, 탄수화물={food_nutrient.carb}g, 지방={food_nutrient.fat}g")
-            print(f"🔢 칼로리 계산: {protein_cal:.1f} + {carb_cal:.1f} + {fat_cal:.1f} = {calories} kcal (per {reference}g)")
             
             nutrients = FoodNutrients(
                 protein=float(food_nutrient.protein or 0.0),
@@ -476,7 +535,7 @@ async def save_user_food(
     try:
         print(f"💾 음식 저장 요청: user_id={request.user_id}, food_name={request.food_name}")
         
-        # 0. 음식명 정규화 (재료 순서 통일)
+        # 1. 음식명 정규화 (재료 순서 통일)
         from app.services.food_matching_service import get_food_matching_service, normalize_food_name
         
         normalized_food_name = normalize_food_name(request.food_name, request.ingredients)
@@ -484,7 +543,7 @@ async def save_user_food(
             print(f"🔄 음식명 정규화: '{request.food_name}' → '{normalized_food_name}'")
             request.food_name = normalized_food_name
         
-        # 1. food_nutrients에서 영양소 정보 조회 (개선된 매칭 서비스 사용)
+        # 2. food_nutrients에서 영양소 정보 조회 (개선된 매칭 서비스 사용)
         print("🔍 food_nutrients에서 음식 정보 조회 중...")
         
         matching_service = get_food_matching_service()
@@ -495,6 +554,27 @@ async def save_user_food(
             food_class_hint=request.food_class_1,
             user_id=request.user_id
         )
+        
+        # 3. portion_size_g 기본값 설정 (DB의 unit 사용)
+        if request.portion_size_g is None or request.portion_size_g <= 0:
+            # DB에서 unit (식품 중량) 사용
+            if food_nutrient:
+                unit_value = food_nutrient.unit  # 이제 Float 타입
+                reference_value = food_nutrient.reference_value or 100.0
+                
+                print(f"🔍 [DEBUG] DB 값 - unit: {unit_value}, reference_value: {reference_value}")
+                
+                if unit_value is not None and unit_value > 0:
+                    request.portion_size_g = float(unit_value)
+                    print(f"✅ DB unit 사용: {request.portion_size_g}g (식품 중량)")
+                else:
+                    request.portion_size_g = 100.0
+                    print(f"⚠️ unit 없음, 기본값 사용: 100g")
+            else:
+                request.portion_size_g = 100.0
+                print(f"⚠️ DB 매칭 실패, 기본값 사용: 100g")
+        else:
+            print(f"✅ 사용자 입력 사용: {request.portion_size_g}g")
         
         # 2. food_id 결정
         if food_nutrient:
@@ -507,30 +587,31 @@ async def save_user_food(
             else:
                 print(f"✅ user_contributed_foods에서 매칭: {actual_food_id} - {food_nutrient.food_name}")
         else:
-            # 매칭 실패 시: LLM으로 영양소 추정 + user_contributed_foods에 추가
-            print(f"⚠️ 매칭 실패, LLM으로 영양소 추정 후 user_contributed_foods에 저장")
+            # 매칭 실패 시: LangChain으로 영양성분 추정 후 user_contributed_foods에 추가
+            print(f"⚠️ 매칭 실패 → LangChain으로 영양성분 추정 후 user_contributed_foods에 저장")
             
-            # LLM으로 영양소 추정 (프론트에서 영양소 정보를 보내지 않은 경우)
-            estimated_nutrients = None
-            if not request.protein and not request.carbs and not request.fat:
-                try:
-                    from app.services.llm_nutrient_estimator import get_nutrient_estimator
-                    estimator = get_nutrient_estimator()
-                    estimated_nutrients = await estimator.estimate_nutrients(
-                        food_name=request.food_name,
-                        ingredients=request.ingredients,
-                        portion_size_g=request.portion_size_g or 100.0
-                    )
-                    print(f"✅ LLM 영양소 추정: {estimated_nutrients['calories']}kcal (P={estimated_nutrients['protein']}g, C={estimated_nutrients['carbs']}g, F={estimated_nutrients['fat']}g)")
-                except Exception as e:
-                    print(f"⚠️ LLM 영양소 추정 실패: {e}, 기본값 사용")
-                    estimated_nutrients = None
+            # LangChain으로 영양성분 추정
+            from app.services.food_db_finder import get_food_db_finder
+            
+            db_finder = get_food_db_finder()
+            nutrition_result = await db_finder.estimate_nutrition_without_db(
+                food_name=request.food_name,
+                ingredients=request.ingredients,
+                portion_size_g=float(request.portion_size_g)
+            )
+            
+            print(f"✅ [LangChain] 영양성분 추정 완료:")
+            print(f"   - 칼로리: {nutrition_result['calories']} kcal")
+            print(f"   - 단백질: {nutrition_result['protein']}g")
+            print(f"   - 탄수화물: {nutrition_result['carbs']}g")
+            print(f"   - 지방: {nutrition_result['fat']}g")
+            print(f"   - 신뢰도: {nutrition_result['confidence']}%")
             
             actual_food_id = f"USER_{request.user_id}_{int(datetime.now().timestamp())}"[:200]
             actual_food_class_1 = request.food_class_1 or (estimated_nutrients['food_class1'] if estimated_nutrients else "사용자추가")
             actual_food_class_2 = request.food_class_2 or (estimated_nutrients['food_class2'] if estimated_nutrients else (request.ingredients[0] if request.ingredients else None))
             
-            # user_contributed_foods에 추가 (영양소 정보 포함)
+            # user_contributed_foods에 추가 (LangChain 추정값 사용)
             new_contributed_food = UserContributedFood(
                 food_id=actual_food_id,
                 user_id=request.user_id,
@@ -539,34 +620,21 @@ async def save_user_food(
                 food_class1=actual_food_class_1,
                 food_class2=actual_food_class_2,
                 ingredients=", ".join(request.ingredients) if request.ingredients else None,
-                unit="g",
-                reference_value=request.portion_size_g or 100.0,
-                # 프론트에서 전달 또는 LLM 추정값 사용
-                protein=request.protein or (estimated_nutrients['protein'] if estimated_nutrients else 0),
-                carb=request.carbs or (estimated_nutrients['carbs'] if estimated_nutrients else 0),
-                fat=request.fat or (estimated_nutrients['fat'] if estimated_nutrients else 0),
-                fiber=request.fiber or (estimated_nutrients['fiber'] if estimated_nutrients else 0),
-                sodium=request.sodium or (estimated_nutrients['sodium'] if estimated_nutrients else 0),
-                calcium=request.calcium or (estimated_nutrients['calcium'] if estimated_nutrients else None),
-                iron=request.iron or (estimated_nutrients['iron'] if estimated_nutrients else None),
-                vitamin_a=request.vitamin_a or (estimated_nutrients['vitamin_a'] if estimated_nutrients else None),
-                vitamin_c=request.vitamin_c or (estimated_nutrients['vitamin_c'] if estimated_nutrients else None),
-                potassium=request.potassium or (estimated_nutrients['potassium'] if estimated_nutrients else None),
-                magnesium=request.magnesium or (estimated_nutrients['magnesium'] if estimated_nutrients else None),
-                saturated_fat=request.saturated_fat or (estimated_nutrients['saturated_fat'] if estimated_nutrients else None),
-                cholesterol=request.cholesterol or (estimated_nutrients['cholesterol'] if estimated_nutrients else None),
-                trans_fat=request.trans_fat or (estimated_nutrients['trans_fat'] if estimated_nutrients else None),
-                added_sugar=request.added_sugar or (estimated_nutrients['added_sugar'] if estimated_nutrients else None),
+                unit=float(request.portion_size_g),  # 식품 중량
+                reference_value=100.0,  # 영양성분함량기준량 (100g 기준)
+                kcal=nutrition_result['calories'],  # 칼로리 추가
+                protein=nutrition_result['protein'],
+                carb=nutrition_result['carbs'],
+                fat=nutrition_result['fat'],
+                sodium=nutrition_result['sodium'],
+                fiber=nutrition_result['fiber'],
                 usage_count=1
             )
             session.add(new_contributed_food)
             await session.flush()
+            food_nutrient = new_contributed_food  # 이후 로직에서 사용할 수 있도록 설정
             
-            print(f"✅ user_contributed_foods에 저장: {actual_food_id} - {request.food_name}")
-            print(f"   영양소: P={new_contributed_food.protein}g, C={new_contributed_food.carb}g, F={new_contributed_food.fat}g")
-            
-            # food_nutrient에 할당하여 이후 로직에서 사용
-            food_nutrient = new_contributed_food
+            print(f"✅ user_contributed_foods에 저장: {actual_food_id} - {request.food_name} (LangChain 추정값)")
         
         # 3. Food 테이블에 음식 저장/조회 (food_nutrients 정보 활용)
         food = await get_or_create_food(
@@ -599,12 +667,50 @@ async def save_user_food(
         if food_nutrient:
             try:
                 from app.services.health_score_service import calculate_nrf93_score as calc_nrf_score, create_health_score
+                from app.services.food_db_finder import get_food_db_finder
                 
-                # 영양소 정보 추출 (100g 기준)
-                protein = getattr(food_nutrient, 'protein', 0) or 0
-                carbs = getattr(food_nutrient, 'carb', 0) or 0
-                fat = getattr(food_nutrient, 'fat', 0) or 0
-                fiber = getattr(food_nutrient, 'fiber', 0) or 0
+                # food_nutrient가 FoodNutrient(DB 매칭 성공) vs UserContributedFood(LangChain 추정) 구분
+                is_from_db = isinstance(food_nutrient, FoodNutrient)
+                
+                if is_from_db:
+                    # DB 매칭 성공 → LangChain으로 portion_size_g에 맞게 재계산
+                    print(f"✅ DB 음식 → LangChain으로 영양성분 계산")
+                    db_finder = get_food_db_finder()
+                    nutrition_result = await db_finder.calculate_nutrition_with_llm(
+                        food_data=food_nutrient,
+                        portion_size_g=float(request.portion_size_g)
+                    )
+                    
+                    actual_kcal = nutrition_result['calories']
+                    protein = nutrition_result['protein']
+                    carb = nutrition_result['carbs']
+                    fat = nutrition_result['fat']
+                    sodium = nutrition_result['sodium']
+                    fiber = nutrition_result['fiber']
+                    
+                    print(f"🔢 [LangChain] 영양성분 계산 완료:")
+                    print(f"   - 칼로리: {nutrition_result['calories']} kcal")
+                    print(f"   - 단백질: {nutrition_result['protein']}g")
+                    print(f"   - 탄수화물: {nutrition_result['carbs']}g")
+                    print(f"   - 지방: {nutrition_result['fat']}g")
+                    print(f"   - 계산 방식: {nutrition_result['calculation_method']}")
+                else:
+                    # UserContributedFood (LangChain 추정) → 이미 추정된 값 사용
+                    print(f"✅ LangChain 추정 음식 → 저장된 값 사용")
+                    actual_kcal = getattr(food_nutrient, 'kcal', 0) or 0
+                    protein = getattr(food_nutrient, 'protein', 0) or 0
+                    carb = getattr(food_nutrient, 'carb', 0) or 0
+                    fat = getattr(food_nutrient, 'fat', 0) or 0
+                    sodium = getattr(food_nutrient, 'sodium', 0) or 0
+                    fiber = getattr(food_nutrient, 'fiber', 0) or 0
+                    
+                    print(f"📊 저장된 영양성분:")
+                    print(f"   - 칼로리: {actual_kcal} kcal")
+                    print(f"   - 단백질: {protein}g")
+                    print(f"   - 탄수화물: {carb}g")
+                    print(f"   - 지방: {fat}g")
+                
+                # 공통: 비타민/미네랄 정보 추출
                 vitamin_a = getattr(food_nutrient, 'vitamin_a', 0) or 0
                 vitamin_c = getattr(food_nutrient, 'vitamin_c', 0) or 0
                 calcium = getattr(food_nutrient, 'calcium', 0) or 0
@@ -613,16 +719,6 @@ async def save_user_food(
                 magnesium = getattr(food_nutrient, 'magnesium', 0) or 0
                 saturated_fat = getattr(food_nutrient, 'saturated_fat', 0) or 0
                 added_sugar = getattr(food_nutrient, 'added_sugar', 0) or 0
-                sodium = getattr(food_nutrient, 'sodium', 0) or 0
-                
-                # 칼로리 계산 (100g 기준, Atwater 시스템: 단백질 4kcal/g, 탄수화물 4kcal/g, 지방 9kcal/g)
-                kcal_per_100g = (protein * 4) + (carbs * 4) + (fat * 9)
-                
-                # 실제 섭취량 기준 칼로리 계산
-                portion_ratio = float(request.portion_size_g) / 100.0 if request.portion_size_g else 1.0
-                actual_kcal = kcal_per_100g * portion_ratio
-                
-                print(f"📊 칼로리 계산: 100g={kcal_per_100g:.0f}kcal, 섭취량={request.portion_size_g}g, 실제={actual_kcal:.0f}kcal")
                 
                 # NRF9.3 점수 계산
                 score_result = await calc_nrf_score(
@@ -630,7 +726,7 @@ async def save_user_food(
                     fiber_g=fiber,
                     vitamin_a_ug=vitamin_a,
                     vitamin_c_mg=vitamin_c,
-                    vitamin_e_mg=0,  # DB에 없으면 0
+                    vitamin_e_mg=0,
                     calcium_mg=calcium,
                     iron_mg=iron,
                     potassium_mg=potassium,
@@ -643,14 +739,14 @@ async def save_user_food(
                 
                 print(f"📊 NRF9.3 점수 계산 완료: {score_result['final_score']:.1f}점")
                 
-                # HealthScore 저장 (올바른 스키마)
+                # HealthScore 저장
                 await create_health_score(
                     session=session,
                     history_id=history.history_id,
                     user_id=request.user_id,
                     food_id=actual_food_id,
-                    reference_value=int(request.portion_size_g),
-                    kcal=int(actual_kcal),  # 실제 섭취량 기준 칼로리
+                    reference_value=100,
+                    kcal=int(actual_kcal),
                     positive_score=int(score_result['positive_score']),
                     negative_score=int(score_result['negative_score']),
                     final_score=int(score_result['final_score']),
@@ -663,7 +759,68 @@ async def save_user_food(
                 import traceback
                 traceback.print_exc()
         else:
-            print(f"⚠️ food_nutrient가 없어 NRF 점수를 계산하지 않음")
+            # DB 매칭 실패 → LangChain으로 영양성분 추정
+            print(f"⚠️ food_nutrient 없음 → LangChain으로 영양성분 추정 시도")
+            
+            try:
+                from app.services.food_db_finder import get_food_db_finder
+                
+                db_finder = get_food_db_finder()
+                nutrition_result = await db_finder.estimate_nutrition_without_db(
+                    food_name=request.food_name,
+                    ingredients=request.ingredients,
+                    portion_size_g=float(request.portion_size_g)
+                )
+                
+                print(f"✅ [LangChain] 영양성분 추정 완료:")
+                print(f"   - 칼로리: {nutrition_result['calories']} kcal")
+                print(f"   - 단백질: {nutrition_result['protein']}g")
+                print(f"   - 탄수화물: {nutrition_result['carbs']}g")
+                print(f"   - 지방: {nutrition_result['fat']}g")
+                print(f"   - 신뢰도: {nutrition_result['confidence']}%")
+                print(f"   - 추정 근거: {nutrition_result['estimation_note']}")
+                
+                # NRF 점수 계산 (추정값 사용)
+                from app.services.health_score_service import calculate_nrf93_score as calc_nrf_score, create_health_score
+                
+                score_result = await calc_nrf_score(
+                    protein_g=nutrition_result['protein'],
+                    fiber_g=nutrition_result['fiber'],
+                    vitamin_a_ug=0,  # 추정 불가
+                    vitamin_c_mg=0,  # 추정 불가
+                    vitamin_e_mg=0,
+                    calcium_mg=0,
+                    iron_mg=0,
+                    potassium_mg=0,
+                    magnesium_mg=0,
+                    saturated_fat_g=nutrition_result['fat'] * 0.3,  # 지방의 30%로 추정
+                    added_sugar_g=0,
+                    sodium_mg=nutrition_result['sodium'],
+                    reference_value_g=float(request.portion_size_g)
+                )
+                
+                print(f"📊 NRF9.3 점수 계산 완료 (추정값 기반): {score_result['final_score']:.1f}점")
+                
+                # HealthScore 저장
+                await create_health_score(
+                    session=session,
+                    history_id=history.history_id,
+                    user_id=request.user_id,
+                    food_id=actual_food_id,
+                    reference_value=100,
+                    kcal=int(nutrition_result['calories']),
+                    positive_score=int(score_result['positive_score']),
+                    negative_score=int(score_result['negative_score']),
+                    final_score=int(score_result['final_score']),
+                    food_grade=score_result['food_grade'],
+                    calc_method=f"{score_result['calc_method']} (LangChain 추정, 신뢰도: {nutrition_result['confidence']}%)"
+                )
+                print(f"✅ HealthScore 저장 완료 (추정값): {score_result['final_score']:.1f}점")
+                
+            except Exception as e:
+                print(f"❌ LangChain 영양성분 추정 실패: {e}")
+                import traceback
+                traceback.print_exc()
         
         # 6. 변경사항 커밋
         await session.commit()

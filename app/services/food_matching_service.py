@@ -76,6 +76,10 @@ def normalize_food_name(food_name: str, ingredients: List[str] = None) -> str:
 class FoodMatchingService:
     """GPT 추천 음식을 DB의 실제 음식과 매칭하는 서비스"""
     
+    def __init__(self):
+        """초기화 - OpenAI 클라이언트 설정"""
+        self.client = None  # GPT 유사도 매칭은 현재 사용하지 않음
+    
     # 핵심 키워드 목록 (음식 카테고리)
     FOOD_KEYWORDS = [
         "샐러드", "볶음", "구이", "찜", "조림", "튀김",
@@ -180,7 +184,7 @@ class FoodMatchingService:
             return ingredient_match
         
         # ========== STEP 4: GPT 기반 유사 음식 찾기 (최후의 수단) ==========
-        if self.client:
+        if hasattr(self, 'client') and self.client:
             gpt_match = await self._gpt_similarity_match(session, food_name, ingredients)
             if gpt_match:
                 print(f"✅ [STEP 4] GPT 유사도 매칭 성공: {gpt_match.food_id} - {gpt_match.nutrient_name}")
@@ -870,5 +874,9 @@ def get_food_matching_service() -> FoodMatchingService:
     """FoodMatchingService 싱글톤 인스턴스 반환"""
     global _food_matching_service
     if _food_matching_service is None:
+        _food_matching_service = FoodMatchingService()
+    # __init__이 없는 경우를 대비한 안전장치
+    elif not hasattr(_food_matching_service, 'client'):
+        print("⚠️ FoodMatchingService 재초기화 중...")
         _food_matching_service = FoodMatchingService()
     return _food_matching_service

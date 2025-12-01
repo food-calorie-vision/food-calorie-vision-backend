@@ -32,6 +32,7 @@ class UserContributedFood(Base):
     reference_value: Mapped[Optional[float]] = mapped_column(Float, nullable=True, comment='영양성분함량기준량 (g)')
     
     # 주요 영양소
+    kcal: Mapped[Optional[float]] = mapped_column(Float, nullable=True, comment='칼로리 (kcal)')
     protein: Mapped[Optional[float]] = mapped_column(Float, nullable=True, comment='단백질 (g)')
     carb: Mapped[Optional[float]] = mapped_column(Float, nullable=True, comment='탄수화물 (g)')
     fat: Mapped[Optional[float]] = mapped_column(Float, nullable=True, comment='지방 (g)')
