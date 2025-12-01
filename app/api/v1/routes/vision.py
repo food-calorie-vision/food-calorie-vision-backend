@@ -555,26 +555,30 @@ async def save_user_food(
             user_id=request.user_id
         )
         
-        # 3. portion_size_g 기본값 설정 (DB의 unit 사용)
-        if request.portion_size_g is None or request.portion_size_g <= 0:
-            # DB에서 unit (식품 중량) 사용
-            if food_nutrient:
-                unit_value = food_nutrient.unit  # 이제 Float 타입
-                reference_value = food_nutrient.reference_value or 100.0
-                
-                print(f"🔍 [DEBUG] DB 값 - unit: {unit_value}, reference_value: {reference_value}")
-                
-                if unit_value is not None and unit_value > 0:
-                    request.portion_size_g = float(unit_value)
-                    print(f"✅ DB unit 사용: {request.portion_size_g}g (식품 중량)")
-                else:
-                    request.portion_size_g = 100.0
-                    print(f"⚠️ unit 없음, 기본값 사용: 100g")
+        # 3. portion_size_g 설정: DB의 unit을 우선 사용 (1인분량)
+        if food_nutrient:
+            unit_value = food_nutrient.unit  # Float 타입
+            reference_value = food_nutrient.reference_value or 100.0
+            
+            print(f"🔍 [DEBUG] DB 값 - unit: {unit_value}, reference_value: {reference_value}")
+            
+            # DB에 unit이 있으면 항상 사용 (1인분량 기준)
+            if unit_value is not None and unit_value > 0:
+                request.portion_size_g = float(unit_value)
+                print(f"✅ DB unit 사용 (1인분): {request.portion_size_g}g")
+            # unit 없으면 사용자 입력 또는 기본값
+            elif request.portion_size_g is None or request.portion_size_g <= 0:
+                request.portion_size_g = 100.0
+                print(f"⚠️ unit 없음, 기본값 사용: 100g")
             else:
+                print(f"✅ 사용자 입력 사용: {request.portion_size_g}g")
+        else:
+            # DB 매칭 실패 시 사용자 입력 또는 기본값
+            if request.portion_size_g is None or request.portion_size_g <= 0:
                 request.portion_size_g = 100.0
                 print(f"⚠️ DB 매칭 실패, 기본값 사용: 100g")
-        else:
-            print(f"✅ 사용자 입력 사용: {request.portion_size_g}g")
+            else:
+                print(f"✅ 사용자 입력 사용: {request.portion_size_g}g")
         
         # 2. food_id 결정
         if food_nutrient:
@@ -608,8 +612,8 @@ async def save_user_food(
             print(f"   - 신뢰도: {nutrition_result['confidence']}%")
             
             actual_food_id = f"USER_{request.user_id}_{int(datetime.now().timestamp())}"[:200]
-            actual_food_class_1 = request.food_class_1 or (estimated_nutrients['food_class1'] if estimated_nutrients else "사용자추가")
-            actual_food_class_2 = request.food_class_2 or (estimated_nutrients['food_class2'] if estimated_nutrients else (request.ingredients[0] if request.ingredients else None))
+            actual_food_class_1 = request.food_class_1 or "사용자추가"
+            actual_food_class_2 = request.food_class_2 or (request.ingredients[0] if request.ingredients else None)
             
             # user_contributed_foods에 추가 (LangChain 추정값 사용)
             new_contributed_food = UserContributedFood(

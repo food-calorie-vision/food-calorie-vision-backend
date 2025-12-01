@@ -254,7 +254,9 @@ class FoodDBFinder:
         db_info = f"""
 **음식명:** {food_data.nutrient_name}
 **영양성분함량기준량 (reference_value):** {reference_value}g
-**식품 중량 (unit):** {food_data.unit}g
+**식품 1인분량 (unit):** {food_data.unit}g
+**사용자 섭취량:** {portion_size_g}g
+
 **{reference_value}g당 영양성분:**
 - 칼로리(kcal): {food_data.kcal or 0}
 - 단백질(g): {food_data.protein or 0}
@@ -263,7 +265,10 @@ class FoodDBFinder:
 - 나트륨(mg): {food_data.sodium or 0}
 - 식이섬유(g): {food_data.fiber or 0}
 
-**사용자 섭취량:** {portion_size_g}g
+**중요:**
+- DB의 영양성분은 {reference_value}g 기준입니다
+- 이 음식의 일반적인 1인분량은 {food_data.unit}g입니다
+- 현재 사용자가 섭취한 양은 {portion_size_g}g입니다
 """
         
         prompt = f"""당신은 영양 계산 전문가입니다. 다음 음식의 영양성분을 계산해주세요.
@@ -272,9 +277,10 @@ class FoodDBFinder:
 
 **계산 방법:**
 1. DB의 영양성분은 {reference_value}g 기준입니다 (reference_value={reference_value}).
-2. 사용자가 섭취한 양은 {portion_size_g}g입니다.
-3. 각 영양성분을 비례 계산하세요: (DB값 × {portion_size_g} / {reference_value})
-4. kcal이 DB에 있으면 그 값을 사용하고, 없으면 Atwater 공식을 사용하세요:
+2. 이 음식의 일반적인 1인분량은 {food_data.unit}g입니다 (unit={food_data.unit}).
+3. 사용자가 섭취한 양은 {portion_size_g}g입니다.
+4. 각 영양성분을 비례 계산하세요: (DB값 × {portion_size_g} / {reference_value})
+5. kcal이 DB에 있으면 그 값을 사용하고, 없으면 Atwater 공식을 사용하세요:
    - 칼로리 = (단백질 × 4) + (탄수화물 × 4) + (지방 × 9)
 
 **응답 형식 (JSON):**
