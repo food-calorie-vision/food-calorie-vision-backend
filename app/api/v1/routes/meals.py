@@ -21,7 +21,8 @@ from app.services.health_score_service import (
     create_health_score,
     calculate_korean_nutrition_score,
     calculate_nrf93_score,
-    get_user_health_scores
+    get_user_health_scores,
+    calculate_daily_comprehensive_score
 )
 from app.services.user_service import calculate_daily_calories
 
@@ -98,6 +99,7 @@ class DashboardStatsResponse(BaseModel):
     total_calories_today: int = Field(..., description="오늘 총 칼로리")
     total_calories_week: int = Field(..., description="이번 주 총 칼로리")
     avg_health_score: float = Field(..., description="오늘 평균 건강 점수")
+    today_score_feedback: Optional[str] = Field(None, description="오늘 점수 피드백 메시지")  # ✨ 추가됨
     previous_day_score: Optional[float] = Field(None, description="전날 평균 건강 점수")
     score_change: Optional[float] = Field(None, description="전날 대비 점수 변화")
     frequent_foods: List[dict] = Field(..., description="자주 먹는 음식 Top 5")
@@ -117,6 +119,9 @@ class CategoryScore(BaseModel):
 class ScoreDetailResponse(BaseModel):
     """상세 점수 현황 응답"""
     overall_score: float = Field(..., description="전체 점수")
+    quality_score: Optional[float] = Field(None, description="식단 품질 점수 (평균 HealthScore)")  # ✨ 추가
+    quantity_score: Optional[float] = Field(None, description="양적 달성도 점수 (0~100 환산)")  # ✨ 추가
+    calorie_ratio: Optional[float] = Field(None, description="목표 대비 칼로리 비율 (%)")  # ✨ 추가
     previous_score: Optional[float] = Field(None, description="전날 점수")
     score_change: Optional[float] = Field(None, description="점수 변화")
     categories: List[CategoryScore] = Field(..., description="카테고리별 점수")
@@ -261,6 +266,13 @@ async def get_dashboard_stats(
     try:
         today = datetime.now().date()
         
+        # 0. 사용자 정보 조회 및 목표 칼로리 계산
+        user_stmt = select(User).where(User.user_id == user_id)
+        user_result = await session.execute(user_stmt)
+        user = user_result.scalar_one_or_none()
+        
+        target_calories = calculate_daily_calories(user) if user else 2000
+        
         # 1. 오늘 총 칼로리
         today_stmt = select(func.sum(HealthScore.kcal)).where(
             and_(
@@ -275,7 +287,7 @@ async def get_dashboard_stats(
         # 2. 이번 주 총 칼로리 (일요일 시작)
         # TODO: 주 시작일 계산 로직 추가
         
-        # 3. 오늘 평균 건강 점수
+        # 3. 오늘 평균 건강 점수 (종합 점수로 개선)
         today_avg_stmt = select(func.avg(HealthScore.final_score)).join(
             UserFoodHistory, HealthScore.history_id == UserFoodHistory.history_id
         ).where(
@@ -285,9 +297,20 @@ async def get_dashboard_stats(
             )
         )
         today_avg_result = await session.execute(today_avg_stmt)
-        avg_health_score = today_avg_result.scalar() or 0
+        raw_avg_score = today_avg_result.scalar() or 0
         
-        # 4. 전날 평균 건강 점수
+        # ✨ 종합 점수 계산 (양 + 질) - HealthScoreService 활용
+        comp_result = calculate_daily_comprehensive_score(
+            total_calories=int(total_calories_today),
+            target_calories=target_calories,
+            avg_quality_score=float(raw_avg_score)
+        )
+        avg_health_score = comp_result["final_score"]
+        score_feedback = comp_result["feedback"]  # ✨ 피드백 추출
+        print(f"📊 종합 점수 계산: {raw_avg_score:.1f}(질) x {comp_result['quantity_factor']}(양) = {avg_health_score}")
+        
+        # 4. 전날 평균 건강 점수 (전날도 종합 점수로 계산해야 정확하지만, 일단 단순 평균 사용하거나 0 처리)
+        # 개선점: 전날 데이터도 동일한 로직으로 계산하면 좋음
         yesterday = today - timedelta(days=1)
         yesterday_avg_stmt = select(func.avg(HealthScore.final_score)).join(
             UserFoodHistory, HealthScore.history_id == UserFoodHistory.history_id
@@ -397,6 +420,7 @@ async def get_dashboard_stats(
                 total_calories_today=int(total_calories_today),
                 total_calories_week=total_calories_week,
                 avg_health_score=float(avg_health_score),
+                today_score_feedback=score_feedback,  # ✨ 추가됨
                 previous_day_score=float(previous_day_score) if previous_day_score is not None else None,
                 score_change=score_change,
                 frequent_foods=frequent_foods,
@@ -870,9 +894,8 @@ async def get_score_detail(
         yesterday_score_result = await session.execute(yesterday_score_stmt)
         previous_score = yesterday_score_result.scalar()
         
+        # score_change 계산은 종합 점수 산출 후로 이동
         score_change = None
-        if previous_score is not None:
-            score_change = round(overall_score - previous_score, 1)
         
         # 3. 오늘 섭취한 음식들의 영양소 정보 조회
         today_foods_stmt = select(
@@ -907,13 +930,36 @@ async def get_score_detail(
         # 목표 칼로리 계산 (공통 함수 사용)
         target_calories = calculate_daily_calories(user) if user else 2000
         
-        # 5. 카테고리별 점수 계산
+        # 5. 종합 점수 및 세부 지표 계산
         categories = []
+        
+        # 기본값 설정
+        raw_quality_score = overall_score  # 기존 단순 평균 점수 (질)
+        quantity_score_val = 0.0
+        calorie_ratio_val = 0.0
         
         if foods_data:
             # 총 칼로리
             total_calories = sum(row[0] or 0 for row in foods_data)
+            
+            # ✨ 종합 점수 재계산 (양 + 질)
+            comp_result = calculate_daily_comprehensive_score(
+                total_calories=int(total_calories),
+                target_calories=target_calories,
+                avg_quality_score=float(raw_quality_score)
+            )
+            
+            overall_score = comp_result["final_score"]  # 종합 점수로 교체
+            quantity_score_val = comp_result["quantity_factor"] * 100
+            calorie_ratio_val = comp_result["calorie_ratio"]
+            
+            # 전날 대비 점수 변화 재계산 (종합 점수 기준)
+            score_change = None
+            if previous_score is not None:
+                score_change = round(overall_score - previous_score, 1)
+            
             # 칼로리 균형 점수 (목표 대비 90-110% = 100점, 그 외는 감점)
+            # calculate_daily_comprehensive_score 로직과 유사하지만 카테고리 표시용으로 유지
             calorie_ratio = (total_calories / target_calories * 100) if target_calories > 0 else 0
             if 90 <= calorie_ratio <= 110:
                 calorie_score = 100
@@ -1085,6 +1131,9 @@ async def get_score_detail(
             success=True,
             data=ScoreDetailResponse(
                 overall_score=round(float(overall_score), 1),
+                quality_score=round(float(raw_quality_score), 1) if raw_quality_score is not None else 0, # ✨ 추가
+                quantity_score=round(float(quantity_score_val), 1), # ✨ 추가
+                calorie_ratio=round(float(calorie_ratio_val), 1), # ✨ 추가
                 previous_score=round(float(previous_score), 1) if previous_score is not None else None,
                 score_change=score_change,
                 categories=categories,

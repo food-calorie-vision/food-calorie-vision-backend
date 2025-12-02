@@ -476,3 +476,86 @@ async def calculate_korean_nutrition_score(
         "calc_method": "한국식 점수 계산식: (단백질 + 섬유질 + 칼슘 + 철분) - (나트륨 + 당분 + 포화지방)",
     }
 
+
+def calculate_daily_comprehensive_score(
+    total_calories: int,
+    target_calories: int,
+    avg_quality_score: float
+) -> dict:
+    """
+    일일 종합 건강 점수 계산 (양 + 질 고려)
+    
+    공식: Final Score = Quality Score (평균 점수) × Quantity Factor (양적 달성도)
+    
+    Args:
+        total_calories: 오늘 섭취한 총 칼로리
+        target_calories: 일일 목표 칼로리
+        avg_quality_score: 섭취한 음식들의 평균 건강 점수 (0~100)
+        
+    Returns:
+        dict: {
+            "final_score": int,          # 최종 종합 점수
+            "quantity_factor": float,    # 양적 달성도 (0.0 ~ 1.0)
+            "calorie_ratio": float,      # 칼로리 달성률 (%)
+            "feedback": str              # 피드백 메시지
+        }
+    """
+    if target_calories <= 0:
+        return {
+            "final_score": 0,
+            "quantity_factor": 0.0,
+            "calorie_ratio": 0.0,
+            "feedback": "목표 칼로리가 설정되지 않았습니다."
+        }
+        
+    # 1. 칼로리 달성률 계산
+    ratio = total_calories / target_calories
+    
+    # 2. Quantity Factor (양적 달성도) 산출
+    # - 0% ~ 80%: 부족 구간 (선형 증가)
+    # - 80% ~ 120%: 적정 구간 (1.0 만점)
+    # - 120% ~ : 과잉 구간 (소폭 감점)
+    
+    if ratio < 0.8:
+        # 예: 0% -> 0.0, 40% -> 0.5, 80% -> 1.0
+        quantity_factor = ratio / 0.8
+        status = "lack"
+    elif 0.8 <= ratio <= 1.2:
+        quantity_factor = 1.0
+        status = "good"
+    else:
+        # 과식 패널티 (120% 초과 시 0.9로 고정하거나 점진적 감점)
+        # 여기서는 너무 심한 감점보다는 경고 차원에서 0.9로 설정
+        quantity_factor = 0.9
+        status = "excess"
+        
+    # 3. 최종 점수 계산
+    final_score = avg_quality_score * quantity_factor
+    
+    # 4. 피드백 메시지 생성
+    feedback = ""
+    if status == "lack":
+        if avg_quality_score >= 80:
+            feedback = "식단 구성은 훌륭해요! 하지만 섭취량이 부족합니다. 끼니를 더 챙겨 드세요."
+        elif avg_quality_score >= 50:
+            feedback = "좋은 음식을 드셨네요. 목표 칼로리를 채우도록 조금 더 드셔보세요."
+        else:
+            feedback = "섭취량도 부족하고 영양 균형도 아쉽습니다. 건강한 음식을 더 챙겨 드세요."
+    elif status == "good":
+        if avg_quality_score >= 80:
+            feedback = "완벽한 하루에요! 양과 질 모두 훌륭합니다. 이대로 유지하세요!"
+        elif avg_quality_score >= 50:
+            feedback = "목표량을 잘 채우셨어요. 영양소 균형에 조금만 더 신경 써보세요."
+        else:
+            feedback = "배부르게 드셨지만, 식단 퀄리티 개선이 필요해요. 채소와 단백질을 늘려보세요."
+    else: # excess
+        feedback = "목표 칼로리를 초과했습니다. 내일은 섭취량을 조금 조절해보세요."
+        
+    return {
+        "final_score": int(round(final_score)),
+        "quantity_factor": round(quantity_factor, 2),
+        "calorie_ratio": round(ratio * 100, 1),
+        "feedback": feedback
+    }
+
+
