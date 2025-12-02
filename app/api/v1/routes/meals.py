@@ -764,7 +764,8 @@ async def save_recommended_meal(
             await session.flush()
             print(f"  ✅ Food 생성: {actual_food_id}, 재료: {ingredients_str}")
         else:
-            print(f"  ✅ Food 존재: {actual_food_id}")
+            # 이미 존재하면 그대로 사용 (이름이 달라도 ID가 같으면 같은 음식으로 간주)
+            print(f"  ✅ Food 이미 존재: {actual_food_id} (기존 이름: {food.food_name})")
         
         food_id = actual_food_id
         
