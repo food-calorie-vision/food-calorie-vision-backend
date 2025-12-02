@@ -49,48 +49,40 @@ class GPTVisionService:
         """이미지 바이트를 base64 문자열로 변환"""
         return base64.b64encode(image_bytes).decode('utf-8')
     
-    def analyze_food_with_detection(
+    async def analyze_food_with_detection(
         self,
         image_bytes: bytes,
         yolo_detection_result: dict
     ) -> dict:
         """
         YOLO detection 결과와 함께 GPT-Vision으로 음식 분석
-        
-        Args:
-            image_bytes: 원본 이미지 바이트 데이터
-            yolo_detection_result: YOLO detection 결과
-                {
-                    "detected_objects": [...],
-                    "summary": "피자 1개 감지됨",
-                    "total_objects": 1
-                }
-        
-        Returns:
-            GPT-Vision 분석 결과
-            {
-                "food_name": "페퍼로니 피자",
-                "description": "...",
-                "calories": 800,
-                "nutrients": {
-                    "protein": 30.0,
-                    "carbs": 80.0,
-                    "fat": 40.0,
-                    "sodium": 1500.0,
-                    "fiber": 3.0
-                },
-                "portion_size": "1조각 (약 150g)",
-                "health_score": 65,
-                "suggestions": [
-                    "...",
-                    "..."
-                ]
-            }
         """
         if self.llm is None:
             raise RuntimeError("OpenAI 클라이언트가 초기화되지 않았습니다. OPENAI_API_KEY를 확인하세요.")
         
         try:
+            # 이미지 크기 확인 및 압축 (1MB 이상이면 리사이즈)
+            image_size_kb = len(image_bytes) / 1024
+            if image_size_kb > 1000:
+                print(f"⚠️ 이미지가 큽니다 ({image_size_kb:.2f} KB). 압축 중...")
+                from PIL import Image
+                import io
+                
+                img = Image.open(io.BytesIO(image_bytes))
+                
+                # 최대 1024px로 리사이즈
+                max_size = 1024
+                if max(img.size) > max_size:
+                    ratio = max_size / max(img.size)
+                    new_size = tuple(int(dim * ratio) for dim in img.size)
+                    img = img.resize(new_size, Image.Resampling.LANCZOS)
+                
+                # JPEG로 압축
+                compressed_buffer = io.BytesIO()
+                img.convert('RGB').save(compressed_buffer, format='JPEG', quality=85)
+                image_bytes = compressed_buffer.getvalue()
+                print(f"✅ 압축 완료: {image_size_kb:.2f} KB → {len(image_bytes)/1024:.2f} KB")
+
             # 이미지를 base64로 인코딩
             base64_image = self._image_to_base64(image_bytes)
             
@@ -114,7 +106,7 @@ class GPTVisionService:
                     },
                 ]
             )
-            response = self.llm.invoke([message])
+            response = await self.llm.ainvoke([message])
             gpt_response = response.content
             
             # 디버깅: GPT 원본 응답 출력
@@ -192,10 +184,6 @@ class GPTVisionService:
 **선택된 음식 (후보1) 상세 정보:**
 1회 제공량: [예: 1조각 (약 150g)]
 건강점수: [0-100점, 숫자만]
-건강 제안사항:
-- [제안 1]
-- [제안 2]
-- [제안 3]
 ---
 
 **중요:**
@@ -207,8 +195,7 @@ class GPTVisionService:
    - 예: 피자 → 밀가루, 토마토소스, 치즈, 페퍼로니
    - 예: 김치찌개 → 김치, 돼지고기, 두부, 파
 6. 건강점수는 영양 균형, 칼로리, 나트륨 등을 고려하여 0-100점으로 평가하세요.
-7. 건강 제안사항은 3개를 작성하세요.
-8. 1회 제공량은 이미지에 보이는 양을 기준으로 추정하세요.
+7. 1회 제공량은 이미지에 보이는 양을 기준으로 추정하세요.
 """
         return prompt
     
@@ -217,13 +204,13 @@ class GPTVisionService:
         try:
             lines = gpt_response.strip().split('\n')
             result = {
-                "candidates": [],  # 후보 음식 리스트
+                "candidates": [],
                 "food_name": "",
                 "description": "",
-                "ingredients": [],  # 주요 재료 리스트
+                "ingredients": [],
                 "portion_size": "",
                 "health_score": 0,
-                "suggestions": []
+                "suggestions": [] # 호환성 유지
             }
             
             current_section = None
@@ -242,7 +229,7 @@ class GPTVisionService:
                         "food_name": "",
                         "confidence": 0.0,
                         "description": "",
-                        "ingredients": []  # 후보별 재료
+                        "ingredients": []
                     }
                     current_section = "candidate"
                     continue
@@ -274,32 +261,22 @@ class GPTVisionService:
                         elif key == "설명":
                             current_candidate["description"] = value
                         elif key.startswith("주요재료"):
-                            # 후보의 재료도 추출
                             if value and value.strip() and value.strip() != "-" and value != "[선택]":
                                 current_candidate["ingredients"].append(value.strip())
                     
-                    # 선택된 음식 정보 파싱 (레거시 호환)
+                    # 선택된 음식 정보 파싱
                     elif current_section == "selected" or current_section is None:
                         if key == "음식명":
                             result["food_name"] = value
                         elif key == "설명" and not result["description"]:
                             result["description"] = value
                         elif key.startswith("주요재료"):
-                            # 빈 값, "-", "[선택]" 제외
                             if value and value.strip() and value.strip() != "-" and value != "[선택]":
                                 result["ingredients"].append(value.strip())
                         elif key == "1회 제공량":
                             result["portion_size"] = value
                         elif key == "건강점수":
                             result["health_score"] = int(float(value.replace("점", "").strip()))
-                        elif key == "건강 제안사항":
-                            current_section = "suggestions"
-                
-                # 제안사항 파싱
-                elif line.startswith("-") and current_section == "suggestions":
-                    suggestion = line[1:].strip()
-                    if suggestion:
-                        result["suggestions"].append(suggestion)
             
             # 마지막 후보 추가
             if current_candidate:
@@ -307,9 +284,13 @@ class GPTVisionService:
             
             # 후보1의 정보를 메인 정보로 설정 (food_name이 비어있을 경우)
             if not result["food_name"] and result["candidates"]:
-                result["food_name"] = result["candidates"][0]["food_name"]
+                first_candidate = result["candidates"][0]
+                result["food_name"] = first_candidate["food_name"]
                 if not result["description"]:
-                    result["description"] = result["candidates"][0]["description"]
+                    result["description"] = first_candidate.get("description", "")
+                # 후보 1번의 재료 복사 (중요!)
+                if not result["ingredients"]:
+                    result["ingredients"] = first_candidate.get("ingredients", [])
             
             # 기본값 설정 (파싱 실패 시)
             if not result["food_name"]:

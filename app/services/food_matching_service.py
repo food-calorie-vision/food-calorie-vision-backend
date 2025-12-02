@@ -1,5 +1,6 @@
 """음식 매칭 서비스 - GPT 추천 음식을 food_nutrients DB와 매칭"""
 from typing import Optional, List, Dict, Union
+import json
 from sqlalchemy import select, or_, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from langchain_openai import ChatOpenAI
@@ -15,62 +16,24 @@ settings = get_settings()
 
 def normalize_food_name(food_name: str, ingredients: List[str] = None) -> str:
     """
-    음식명을 정규화하여 재료 순서가 달라도 같은 이름으로 만듦
+    음식명을 정규화 (공백 정리 등)
     
-    예시:
-    - "양배추 사과 샐러드" → "사과 양배추 샐러드"
-    - "사과 양배추 샐러드" → "사과 양배추 샐러드"
+    기존에는 재료 순서를 정렬하는 등 과도한 정규화를 수행했으나,
+    '육회 비빔밥' -> '비빔 육회 밥' 처럼 어순이 파괴되는 부작용이 있어
+    단순 공백 정리로 로직을 완화함.
     
     Args:
         food_name: 원본 음식명
         ingredients: 재료 리스트 (옵션)
         
     Returns:
-        정규화된 음식명
+        정규화된 음식명 (원본 보존)
     """
     if not food_name:
         return food_name
-    
-    # 음식 타입 키워드 (샐러드, 볶음 등)
-    food_type_keywords = [
-        "샐러드", "볶음", "구이", "찜", "조림", "튀김",
-        "국", "탕", "찌개", "전골", "스튜", "수프",
-        "김밥", "밥", "덮밥", "비빔밥", "볶음밥",
-        "면", "국수", "파스타", "라면", "우동", "소바",
-        "빵", "케이크", "쿠키", "파이", "머핀",
-        "스테이크", "커틀릿", "돈까스", "치킨",
-        "피자", "버거", "샌드위치", "토스트",
-        "스무디", "주스", "차", "음료"
-    ]
-    
-    # 음식 타입 추출
-    food_type = None
-    for keyword in food_type_keywords:
-        if keyword in food_name:
-            food_type = keyword
-            break
-    
-    if not food_type:
-        # 음식 타입이 없으면 그대로 반환
-        return food_name
-    
-    # 음식명에서 음식 타입을 제외한 재료 부분 추출
-    ingredients_part = food_name.replace(food_type, "").strip()
-    
-    # 재료를 공백으로 분리하고 정렬
-    ingredient_tokens = re.split(r'[\s,]+', ingredients_part)
-    ingredient_tokens = [token.strip() for token in ingredient_tokens if token.strip()]
-    
-    if not ingredient_tokens:
-        return food_name
-    
-    # 재료를 알파벳순으로 정렬
-    ingredient_tokens.sort()
-    
-    # 정규화된 음식명 생성
-    normalized_name = " ".join(ingredient_tokens) + " " + food_type
-    
-    return normalized_name
+        
+    # 불필요한 다중 공백을 단일 공백으로 치환하고 앞뒤 공백 제거
+    return " ".join(food_name.split())
 
 
 class FoodMatchingService:
@@ -126,6 +89,45 @@ class FoodMatchingService:
         else:
             self.llm = None
     
+    async def interpret_portion(self, food_name: str, portion_text: str) -> float:
+        """
+        자연어 섭취량을 그램(g) 단위로 변환
+        
+        Args:
+            food_name: 음식 이름
+            portion_text: 자연어 섭취량 (예: "한 그릇", "반 개", "200g")
+            
+        Returns:
+            추정된 무게 (g)
+        """
+        if not self.llm:
+            return 100.0  # 기본값
+
+        prompt = f"""
+        음식 '{food_name}'의 섭취량 표현 '{portion_text}'를 그램(g) 단위로 변환하세요.
+        
+        일반적인 기준:
+        - 밥 한 공기: 210g
+        - 국/찌개 한 대접: 250-300g
+        - 반찬 1인분: 50-80g
+        - 라면 1개: 120g (면) + 500ml (국물) -> 섭취량은 보통 500-600g (국물 포함 시)
+        - 피자 1조각: 100-120g
+        
+        JSON 형식으로 'weight_g' 키에 숫자만 포함하여 응답하세요.
+        예: {{"weight_g": 210}}
+        """
+        
+        try:
+            response = await self.llm.ainvoke([
+                SystemMessage(content="당신은 식품 영양 전문가입니다. 정확한 중량을 JSON으로 반환하세요."),
+                HumanMessage(content=prompt)
+            ])
+            data = json.loads(response.content)
+            return float(data.get("weight_g", 100.0))
+        except Exception as e:
+            print(f"⚠️ 섭취량 해석 실패: {e}")
+            return 100.0
+
     async def match_food_to_db(
         self,
         session: AsyncSession,

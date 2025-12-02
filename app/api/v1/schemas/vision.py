@@ -43,14 +43,9 @@ class FoodAnalysisResult(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     food_name: str = Field(alias="foodName")
-    description: str = ""  # 음식 설명
+    description: str = ""  # 음식 설명 (필요시)
     ingredients: list[str] = []  # 주요 재료 3-4개
-    calories: int
-    nutrients: FoodNutrients
-    portion_size: str = Field(default="1인분", alias="portionSize")  # 1회 제공량
-    health_score: int = Field(default=0, alias="healthScore")  # 건강 점수 (0-100)
     confidence: float
-    suggestions: list[str]
     candidates: list[FoodCandidate] = []  # 여러 후보 음식 리스트
 
 
@@ -72,36 +67,45 @@ class FoodReanalysisRequest(BaseModel):
 
 
 class SaveFoodRequest(BaseModel):
-    """음식 저장 요청"""
+    """음식 저장 요청 (Preview 단계에서 확정된 정보 저장)"""
 
     model_config = ConfigDict(populate_by_name=True)
 
     user_id: int = Field(alias="userId")
     food_name: str = Field(alias="foodName")
-    meal_type: str = Field(default="lunch", alias="mealType", description="식사 유형 (breakfast/lunch/dinner/snack)")
-    food_class_1: str | None = Field(None, alias="foodClass1")  # 대분류
-    food_class_2: str | None = Field(None, alias="foodClass2")  # 중분류
-    ingredients: list[str] = []  # 재료 리스트
-    portion_size_g: float | None = Field(100.0, alias="portionSizeG")  # 섭취량(g) - 기본값 100g
-    image_ref: str | None = Field(None, alias="imageRef")  # 이미지 참조 (선택)
-    category: str | None = None  # 카테고리 (선택)
+    food_id: str = Field(alias="foodId", description="Preview에서 확정된 Food ID")
     
-    # 영양소 정보 (선택사항 - LLM이 추정하거나 프론트에서 전달)
-    protein: float | None = None  # 단백질 (g)
-    carbs: float | None = None  # 탄수화물 (g)
-    fat: float | None = None  # 지방 (g)
-    fiber: float | None = None  # 식이섬유 (g)
-    sodium: float | None = None  # 나트륨 (mg)
-    calcium: float | None = None  # 칼슘 (mg)
-    iron: float | None = None  # 철분 (mg)
-    vitamin_a: float | None = None  # 비타민 A (μg)
-    vitamin_c: float | None = None  # 비타민 C (mg)
-    potassium: float | None = None  # 칼륨 (mg)
-    magnesium: float | None = None  # 마그네슘 (mg)
-    saturated_fat: float | None = None  # 포화지방 (g)
-    cholesterol: float | None = None  # 콜레스테롤 (mg)
-    trans_fat: float | None = None  # 트랜스지방 (g)
-    added_sugar: float | None = None  # 첨가당 (g)
+    # 섭취 정보
+    meal_type: str = Field(default="lunch", alias="mealType")
+    portion_size_g: float = Field(alias="portionSizeG")
+    image_ref: str | None = Field(None, alias="imageRef")
+    
+    # 확정된 영양 정보 (Preview에서 계산됨)
+    calories: float = Field(alias="calories")
+    protein: float = Field(alias="protein")
+    carbs: float = Field(alias="carbs")
+    fat: float = Field(alias="fat")
+    sodium: float = Field(alias="sodium")
+    fiber: float = Field(default=0.0, alias="fiber")
+    
+    # 선택적 추가 영양소 (NRF 계산에 사용된 값들)
+    vitamin_a: float | None = Field(None, alias="vitaminA")
+    vitamin_c: float | None = Field(None, alias="vitaminC")
+    calcium: float | None = Field(None, alias="calcium")
+    iron: float | None = Field(None, alias="iron")
+    potassium: float | None = Field(None, alias="potassium")
+    magnesium: float | None = Field(None, alias="magnesium")
+    saturated_fat: float | None = Field(None, alias="saturatedFat")
+    added_sugar: float | None = Field(None, alias="addedSugar")
+    
+    # 확정된 점수 정보
+    health_score: int = Field(alias="healthScore")
+    
+    # 메타 정보 (DB 분류용)
+    food_class_1: str | None = Field(None, alias="foodClass1")
+    food_class_2: str | None = Field(None, alias="foodClass2")
+    ingredients: list[str] = []
+    category: str | None = None
 
 
 class SaveFoodResponse(BaseModel):
@@ -115,3 +119,25 @@ class SaveFoodResponse(BaseModel):
     meal_type: str = Field(alias="mealType", description="식사 유형 (breakfast/lunch/dinner/snack)")
     consumed_at: str = Field(alias="consumedAt")
     portion_size_g: float | None = Field(None, alias="portionSizeG")
+
+
+class PreviewNutritionRequest(BaseModel):
+    """영양 정보 미리보기 요청"""
+    model_config = ConfigDict(populate_by_name=True)
+
+    food_name: str = Field(alias="foodName")
+    ingredients: list[str] = Field(default=[], alias="ingredients")
+    portion_text: str = Field(alias="portionText")
+
+
+class PreviewNutritionResponse(BaseModel):
+    """영양 정보 미리보기 응답"""
+    model_config = ConfigDict(populate_by_name=True)
+
+    food_id: str = Field(alias="foodId")
+    food_name: str = Field(alias="foodName")
+    calories: float = Field(alias="calories")
+    nutrients: FoodNutrients = Field(alias="nutrients")
+    portion_size_g: float = Field(alias="portionSizeG")
+    health_score: int = Field(alias="healthScore")
+    
