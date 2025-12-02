@@ -81,6 +81,7 @@ class UserInfoResponse(BaseModel):
     age: int | None = None
     weight: float | None = None
     health_goal: str
+    recommended_calories: int = 2000  # 목표 칼로리 (계산된 값)
     created_at: str | None = None
     updated_at: str | None = None
     session_max_age: int | None = None  # 세션 최대 유효 시간 (초)

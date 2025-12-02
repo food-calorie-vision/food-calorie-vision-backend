@@ -23,6 +23,7 @@ from app.services.health_score_service import (
     calculate_nrf93_score,
     get_user_health_scores
 )
+from app.services.user_service import calculate_daily_calories
 
 router = APIRouter()
 settings = get_settings()
@@ -903,25 +904,8 @@ async def get_score_detail(
         user_result = await session.execute(user_stmt)
         user = user_result.scalar_one_or_none()
         
-        # 목표 칼로리 계산 (BMR 기반, 간단한 추정)
-        target_calories = 2000  # 기본값
-        if user and user.weight and user.age and user.gender:
-            # 간단한 BMR 계산 (Mifflin-St Jeor)
-            if user.gender == 'M':
-                bmr = 10 * float(user.weight) + 6.25 * (user.age or 30) - 5 * (user.age or 30) + 5
-            else:
-                bmr = 10 * float(user.weight) + 6.25 * (user.age or 30) - 5 * (user.age or 30) - 161
-            
-            # 활동 수준에 따른 TDEE (기본: 중간 활동)
-            tdee = bmr * 1.55
-            
-            # 건강 목표에 따른 조정
-            if user.health_goal == 'loss':
-                target_calories = int(tdee * 0.85)  # 15% 감소
-            elif user.health_goal == 'gain':
-                target_calories = int(tdee * 1.15)  # 15% 증가
-            else:
-                target_calories = int(tdee)
+        # 목표 칼로리 계산 (공통 함수 사용)
+        target_calories = calculate_daily_calories(user) if user else 2000
         
         # 5. 카테고리별 점수 계산
         categories = []

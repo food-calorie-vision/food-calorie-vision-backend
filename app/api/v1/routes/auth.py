@@ -15,6 +15,7 @@ from app.api.v1.schemas.auth import (
 )
 from app.db.session import get_session
 from app.services import auth_service
+from app.services.user_service import calculate_daily_calories  # ✨ 추가됨
 from app.services.user_context_cache import refresh_user_context, invalidate_user_context
 from app.utils.session import (
     get_current_user_id,
@@ -179,6 +180,8 @@ async def get_current_user(
 ) -> UserInfoResponse:
     """
     현재 로그인한 사용자 정보 조회 (읽기 전용 - 세션 갱신 안함)
+    
+    - 사용자 기본 정보 및 계산된 목표 칼로리(recommended_calories) 반환
     """
     if not is_authenticated(request):
         print(f"❌ 세션 체크 실패: 인증되지 않음")
@@ -218,6 +221,9 @@ async def get_current_user(
     if not user:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
 
+    # --- 목표 칼로리 계산 (공통 함수 사용) ---
+    target_calories = calculate_daily_calories(user)
+
     return UserInfoResponse(
         user_id=user.user_id,
         username=user.username,
@@ -227,6 +233,7 @@ async def get_current_user(
         age=user.age,
         weight=user.weight,
         health_goal=user.health_goal,
+        recommended_calories=target_calories,  # 계산된 목표 칼로리 전달
         created_at=user.created_at.isoformat() if user.created_at else None,
         updated_at=user.updated_at.isoformat() if user.updated_at else None,
         session_max_age=settings.session_max_age,
