@@ -1,8 +1,0 @@
-- /home/pollux/workspace/food-calorie-vision-main/food-calorie-vision-backend/app/api/v1/routes/ingredients.py
-- /home/pollux/workspace/food-calorie-vision-main/food-calorie-vision-backend/app/api/v1/routes/meals.py
-- /home/pollux/workspace/food-calorie-vision-main/food-calorie-vision-backend/app/services/diet_recommendation_service.py
-- /home/pollux/workspace/food-calorie-vision-main/food-calorie-vision-backend/app/services/food_matching_service.py
-- /home/pollux/workspace/food-calorie-vision-main/food-calorie-vision-backend/app/services/gpt_vision_service.py
-- /home/pollux/workspace/food-calorie-vision-main/food-calorie-vision-backend/app/services/recipe_recommendation_service.py
-- 위 파일들은 랭체인을 이용해서 서비스를 제공하는 항목입니다. 그러나 현재, api를 호출할 뿐 랭체인을 사용하지 않아서 챗봇이 대화를 기억하고 있지 않습니다. 해결 방법을 agents.md로 작성하세요
-- 조건: 기존 파일의 목적은 달성해야 합니다. 사용자의 건강목표, 기저질환을 고려한 대답 제공 등..
