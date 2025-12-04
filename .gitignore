@@ -85,3 +85,4 @@ dmypy.json
 # Backup files
 *.bak
 
+".env" 
