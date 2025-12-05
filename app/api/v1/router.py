@@ -12,7 +12,7 @@ api_router.include_router(auth.router, prefix="/auth", tags=["authentication"])
 api_router.include_router(chat_v2.router, tags=["chat"])
 
 # 사용자 관련 라우트
-api_router.include_router(users.router, prefix="/user", tags=["users"])
+api_router.include_router(users.router, prefix="/users", tags=["users"])
 
 # 음식 이미지 분석 라우트
 api_router.include_router(vision.router, prefix="/food", tags=["vision"])
