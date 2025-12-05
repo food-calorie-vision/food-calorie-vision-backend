@@ -52,6 +52,7 @@ async def create_user(
     gender: str | None = None,
     age: int | None = None,
     weight: float | None = None,
+    height: float | None = None,  # ✅ 키(height) 파라미터 추가
     health_goal: str = "maintain",
     allergies: str | None = None,
     diseases: str | None = None,
@@ -67,7 +68,8 @@ async def create_user(
         nickname: 닉네임
         gender: 성별 ('M', 'F', 'Other')
         age: 나이
-        weight: 체중
+        weight: 체중 (kg)
+        height: 키 (cm)
         health_goal: 건강 목표 ('gain', 'maintain', 'loss')
         allergies: 알레르기 정보 (콤마로 구분된 문자열)
         diseases: 기저질환 정보 (콤마로 구분된 문자열)
@@ -97,6 +99,7 @@ async def create_user(
         gender=gender,
         age=age,
         weight=weight,
+        height=height,  # ✅ 키(height) 추가
         health_goal=health_goal,
     )
 

@@ -18,6 +18,7 @@ class SignupRequest(BaseModel):
     gender: Optional[Literal['M', 'F']] = Field(None, description="성별 (M/F)")
     age: Optional[int] = Field(None, ge=0, le=150, description="나이")
     weight: Optional[float] = Field(None, ge=0, description="체중 (kg)")
+    height: Optional[float] = Field(None, ge=0, description="키 (cm)")
     health_goal: Literal['gain', 'maintain', 'loss'] = Field(default="maintain", description="건강 목표 (gain/maintain/loss)")
     
     allergies: Optional[str] = Field(None, description="알레르기 정보 (콤마로 구분된 문자열)")
@@ -80,6 +81,7 @@ class UserInfoResponse(BaseModel):
     gender: str | None = None
     age: int | None = None
     weight: float | None = None
+    height: float | None = None  # 키 추가
     health_goal: str
     recommended_calories: int = 2000  # 목표 칼로리 (계산된 값)
     created_at: str | None = None

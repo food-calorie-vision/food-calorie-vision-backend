@@ -52,6 +52,7 @@ async def signup(
             gender=signup_data.gender,
             age=signup_data.age,
             weight=signup_data.weight,
+            height=signup_data.height,  # ✅ 키(height) 추가
             health_goal=signup_data.health_goal,
             allergies=signup_data.allergies,
             diseases=signup_data.diseases,
