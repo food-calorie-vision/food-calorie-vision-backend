@@ -47,7 +47,7 @@ coverage.xml
 .hypothesis/
 
 # Environment Variables
-#.env
+.env
 .env.local
 .env.*.local
 
@@ -85,3 +85,4 @@ dmypy.json
 # Backup files
 *.bak
 
+".env" 

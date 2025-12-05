@@ -388,6 +388,17 @@ class DietRecommendationService:
             # meal_details를 dict 형식으로 변환 (Pydantic이 자동으로 AllMealDetails로 변환)
             if meal_details:
                 plan["meal_details"] = meal_details
+            
+            # ✅ 총 칼로리를 끼니별 칼로리 합으로 재계산
+            calculated_total = 0.0
+            for meal_type in ["breakfast", "lunch", "dinner", "snack"]:
+                if meal_type in meal_details and "calories" in meal_details[meal_type]:
+                    calculated_total += meal_details[meal_type]["calories"]
+            
+            if calculated_total > 0:
+                plan["totalCalories"] = f"{int(calculated_total)} kcal"
+                print(f"✅ 총 칼로리 재계산: {int(calculated_total)} kcal (끼니별 합산)")
+            
             return plan
         
         return None

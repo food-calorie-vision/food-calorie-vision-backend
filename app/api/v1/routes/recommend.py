@@ -454,3 +454,92 @@ async def get_diet_plan_detail(
             detail=f"식단 상세 조회 중 오류가 발생했습니다: {str(e)}"
         )
 
+
+@router.delete("/diet-plan-meal/{meal_id}", response_model=ApiResponse[dict])
+async def delete_diet_plan_meal(
+    meal_id: int,
+    current_user: User = Depends(get_current_active_user),
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    추천 식단의 개별 끼니(DietPlanMeal)를 삭제합니다.
+    해당 DietPlan의 모든 끼니가 삭제되면 DietPlan도 함께 삭제됩니다.
+    
+    **Args:**
+        meal_id: 삭제할 끼니의 ID (DietPlanMeal.meal_id)
+        current_user: 현재 로그인한 사용자
+        session: DB 세션
+    
+    **Returns:**
+        삭제 결과 메시지
+    """
+    try:
+        # 1. 해당 끼니 조회 (사용자 소유 확인)
+        meal_stmt = select(DietPlanMeal, DietPlan).where(
+            DietPlanMeal.meal_id == meal_id
+        ).join(DietPlan, DietPlanMeal.diet_plan_id == DietPlan.diet_plan_id)
+        
+        result = await session.execute(meal_stmt)
+        row = result.first()
+        
+        if not row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="해당 식단 끼니를 찾을 수 없습니다."
+            )
+        
+        meal, plan = row
+        
+        # 2. 사용자 소유 확인
+        if plan.user_id != current_user.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="해당 식단에 대한 권한이 없습니다."
+            )
+        
+        diet_plan_id = meal.diet_plan_id
+        meal_name = meal.meal_name
+        
+        # 3. 끼니 삭제
+        await session.delete(meal)
+        await session.flush()
+        
+        # 4. 해당 DietPlan의 남은 끼니 수 확인
+        remaining_stmt = select(DietPlanMeal).where(
+            DietPlanMeal.diet_plan_id == diet_plan_id
+        )
+        remaining_result = await session.execute(remaining_stmt)
+        remaining_meals = remaining_result.scalars().all()
+        
+        # 5. 남은 끼니가 없으면 DietPlan도 삭제
+        plan_deleted = False
+        if len(remaining_meals) == 0:
+            await session.delete(plan)
+            plan_deleted = True
+            print(f"🗑️ 식단 플랜 삭제: {plan.plan_name} (모든 끼니 삭제됨)")
+        
+        await session.commit()
+        
+        print(f"✅ 식단 끼니 삭제: {meal_name} (meal_id: {meal_id})")
+        
+        return ApiResponse(
+            success=True,
+            data={
+                "deleted_meal_id": meal_id,
+                "meal_name": meal_name,
+                "plan_deleted": plan_deleted
+            },
+            message=f"✅ '{meal_name}' 식단이 삭제되었습니다." + (" (식단 플랜도 함께 삭제됨)" if plan_deleted else "")
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        await session.rollback()
+        print(f"❌ 식단 끼니 삭제 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"식단 끼니 삭제 중 오류가 발생했습니다: {str(e)}"
+        )

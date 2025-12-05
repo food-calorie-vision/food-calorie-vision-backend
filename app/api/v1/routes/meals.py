@@ -441,20 +441,23 @@ async def get_dashboard_stats(
 async def get_meal_history(
     limit: int = 20,
     offset: int = 0,
+    include_diet_plans: bool = True,
     session: AsyncSession = Depends(get_session),
     user_id: int = Depends(require_authentication)
 ) -> ApiResponse[List[MealRecordResponse]]:
     """
-    음식 섭취 기록 조회
+    음식 섭취 기록 조회 (추천 식단 포함)
     
     **Args:**
         limit: 조회 개수
         offset: 오프셋
+        include_diet_plans: 추천 식단 포함 여부 (기본 True)
         session: DB 세션
         
     **Returns:**
-        음식 기록 목록
+        음식 기록 목록 (UserFoodHistory + DietPlanMeal 통합)
     """
+    from app.db.models import DietPlan, DietPlanMeal
     try:
         # UserFoodHistory + HealthScore 조인 조회
         stmt = select(UserFoodHistory, HealthScore).where(
@@ -486,6 +489,35 @@ async def get_meal_history(
                 food_grade=health_score.food_grade if health_score else None,
                 meal_type=history.meal_type  # 식사 유형 추가
             ))
+        
+        # ✅ 추천 식단(DietPlanMeal) 조회 및 통합
+        if include_diet_plans:
+            diet_stmt = select(DietPlanMeal, DietPlan).where(
+                DietPlan.user_id == user_id
+            ).join(DietPlan, DietPlanMeal.diet_plan_id == DietPlan.diet_plan_id)
+            
+            diet_result = await session.execute(diet_stmt)
+            diet_rows = diet_result.all()
+            
+            for meal, plan in diet_rows:
+                # food_name: "식단명: 음식메뉴" 형식으로 표시
+                food_name = f"{plan.plan_name}: {meal.food_description or meal.meal_name}"
+                
+                records.append(MealRecordResponse(
+                    history_id=-meal.meal_id,  # 음수 ID로 구분
+                    user_id=user_id,
+                    food_id=f"diet_plan_{meal.diet_plan_id}",
+                    food_name=food_name,
+                    consumed_at=plan.created_at or datetime.now(),
+                    portion_size_g=0,
+                    calories=int(meal.calories) if meal.calories else 0,
+                    health_score=None,
+                    food_grade=None,
+                    meal_type=meal.meal_type
+                ))
+        
+        # 날짜 기준 정렬 (최신순)
+        records.sort(key=lambda x: x.consumed_at, reverse=True)
         
         return ApiResponse(
             success=True,
