@@ -18,7 +18,7 @@ class DietRecommendationService:
     
     def calculate_bmr(self, gender: str, age: int, weight: float, height: Optional[float] = None) -> float:
         """
-        기초대사량(BMR) 계산 - Harris-Benedict 공식 사용
+        기초대사량(BMR) 계산 - Mifflin-St Jeor 공식 사용
         
         Args:
             gender: 'M' (남성), 'F' (여성), 'Other'
@@ -33,18 +33,20 @@ class DietRecommendationService:
         if height is None:
             height = 170.0 if gender == 'M' else 160.0
         
-        # Harris-Benedict 공식 (수정판)
+        # Mifflin-St Jeor 공식
+        # BMR = (10 × 체중kg) + (6.25 × 키cm) - (5 × 나이) + s
+        # 남성: s = +5
+        # 여성: s = -161
+        
+        base_bmr = (10 * weight) + (6.25 * height) - (5 * age)
+        
         if gender == 'M':
-            # 남성: BMR = 88.362 + (13.397 × 체중kg) + (4.799 × 키cm) - (5.677 × 나이)
-            bmr = 88.362 + (13.397 * weight) + (4.799 * height) - (5.677 * age)
+            bmr = base_bmr + 5
         elif gender == 'F':
-            # 여성: BMR = 447.593 + (9.247 × 체중kg) + (3.098 × 키cm) - (4.330 × 나이)
-            bmr = 447.593 + (9.247 * weight) + (3.098 * height) - (4.330 * age)
+            bmr = base_bmr - 161
         else:
-            # Other: 평균값 사용
-            bmr_m = 88.362 + (13.397 * weight) + (4.799 * height) - (5.677 * age)
-            bmr_f = 447.593 + (9.247 * weight) + (3.098 * height) - (4.330 * age)
-            bmr = (bmr_m + bmr_f) / 2
+            # Other: 남녀 평균값 사용
+            bmr = base_bmr + ((5 - 161) / 2)  # -78
         
         return round(bmr, 1)
     
