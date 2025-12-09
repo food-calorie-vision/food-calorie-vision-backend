@@ -548,16 +548,28 @@ async def get_recipe_detail(
         
         print(f"📖 '{request.recipe_name}' 레시피 상세 조회 중...")
         
-        # 2. 레시피 상세 정보 조회
+        # 3. 사용자 질병 및 알레르기 정보 조회 (안전성 유지를 위해 필수)
+        profile_stmt = select(DiseaseAllergyProfile).where(
+            DiseaseAllergyProfile.user_id == user.user_id
+        )
+        profile_result = await session.execute(profile_stmt)
+        profiles = profile_result.scalars().all()
+        
+        diseases = [p.disease_name for p in profiles if p.disease_name]
+        allergies = [p.allergy_name for p in profiles if p.allergy_name]
+        
+        # 4. 레시피 상세 정보 조회
         recipe_service = get_recipe_recommendation_service()
         result_data = await recipe_service.get_recipe_detail(
             recipe_name=request.recipe_name,
-            user=user
+            user=user,
+            diseases=diseases,
+            allergies=allergies
         )
         
         print(f"✅ 레시피 상세 정보 조회 완료: 총 {result_data.get('total_steps', 0)}단계")
         
-        # 3. 응답 반환
+        # 5. 응답 반환
         return ApiResponse(
             success=True,
             data=RecipeDetailResponse(**result_data),

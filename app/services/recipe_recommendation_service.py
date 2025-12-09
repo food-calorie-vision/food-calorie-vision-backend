@@ -105,7 +105,7 @@ class RecipeRecommendationService:
             ]
             today_status_text = f"\n\n**오늘 식사 현황 및 부족 영양소:**\n" + "\n".join(deficient_list)
             today_status_text += "\n\n**중요:** 사용자가 요청한 재료에 추가로 부족한 영양소를 보완할 수 있는 재료를 포함한 레시피를 추천해주세요."
-            today_status_text += "\n예: 단백질이 부족하면 닭가슴살, 계란, 두부 등을 추가하고, 식이섬유가 부족하면 채소, 과일, 견과류 등을 추가하세요."
+            today_status_text += "\n예: 단백질이 부족하면 흰살 생선, 콩류, 살코기, 해산물 등을 다양하게 활용하고, 식이섬유가 부족하면 해조류, 버섯, 다양한 색깔의 채소 등을 추가하여 식단의 단조로움을 피하세요."
 
         excess_warnings_text = ""
         if excess_warnings:
@@ -159,69 +159,100 @@ class RecipeRecommendationService:
         user: User,
         intent_text: str,
         context: RecipePromptContext,
+        diseases: Optional[List[str]] = None,
+        allergies: Optional[List[str]] = None,
         intent_metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         metadata_text = ""
         safety_directive = ""
         
+        # 리스트 포맷팅 (빈 리스트 처리)
+        diseases_str = ", ".join(diseases) if diseases else "없음"
+        allergies_str = ", ".join(allergies) if allergies else "없음"
+        
         if intent_metadata:
             safe_items = []
             if intent_metadata.get("intent_summary"):
-                safe_items.append(f"- 의도 요약: {intent_metadata['intent_summary']}")
+                safe_items.append(f"- 의도: {intent_metadata['intent_summary']}")
+            
+            # 위험 요소 요약
             risk_flags = intent_metadata.get("risk_flags")
             if isinstance(risk_flags, list) and risk_flags:
-                safe_items.append(f"- 위험 요소: {', '.join(risk_flags)}")
+                safe_items.append(f"- 위험: {', '.join(risk_flags)}")
             
             safety_mode = intent_metadata.get("safety_mode")
+            
+            # === [분기 처리] safety_mode에 따라 지시 사항 최적화 ===
             if safety_mode == "health_first":
-                safe_items.append("- 사용자 선택: 건강을 우선하는 대체 레시피 선호")
-                safety_directive = "🚨 **[핵심 지시] 사용자가 건강을 최우선으로 선택했습니다.** 원래 메뉴의 느낌을 살리되, **반드시 저염/저지방 재료로 대체**하여 레시피를 변형하세요. (예: 대창 -> 곤약/두부, 튀김 -> 구이)"
+                safe_items.append("- 모드: 건강/안전 우선 (대체 레시피)")
+                
+                # 3단계 안전 계층 (Safety Hierarchy) & 맛의 조화
+                safety_directive = f"""
+**[핵심 지시: 3단계 안전 및 맛 보장]**
+사용자의 건강을 위해 다음 3단계를 순서대로 적용하세요.
+
+1. **[Level 1: 알레르기 절대 배제 (Critical)]**
+   - 알레르기 유발 재료({allergies_str})는 소스/육수를 포함해 **0.01%도 남기지 말고 제거**하세요.
+   - 대체가 불가능하면 메뉴 자체를 안전한 것으로 변경하세요.
+
+2. **[Level 2: 질병 관리 (Strict Constraint)]**
+   - 질병({diseases_str})에 치명적인 재료(예: 고지혈증-내장류, 당뇨-설탕)는 조리법 변경 대신 **식재료를 '완전 대체'**하세요.
+   - 예: "기름 뺀 대창"(X) -> "식감이 쫄깃한 새송이 버섯/관자"(O)
+
+3. **[Level 3: 식감 유지 및 요리적 조화 (Culinary Harmony)]**
+   - **금지:** 무조건적인 '닭가슴살', '곤약' 반복 추천, 맛이 없는 괴식(끔찍한 혼종).
+   - **권장:** 제외된 재료의 **식감(Texture)과 풍미**를 살리는 **검증된 맛있는 건강 재료**를 사용하세요.
+   - 조화 예시: 
+     - 쫄깃한 식감(내장) -> 버섯, 전복, 오징어, 두부면
+     - 튀김 요리 -> 에어프라이어 구이, 콩가루/현미 베이크
+     - 국물 요리 -> 염분을 줄인 채수, 건더기 위주
+
+위 원칙을 지켜 **"맛과 건강을 모두 잡은 현실적인 레시피"**를 제안하세요."""
+
             elif safety_mode == "proceed":
-                safe_items.append("- 사용자 선택: 경고를 인지했지만 원래 요청 그대로 진행")
-                safety_directive = "🚨 **[핵심 지시] 사용자가 건강 경고를 무시하고 원래 맛을 선택했습니다.** 건강을 고려하여 메뉴를 변경하지 말고, **사용자가 요청한 음식 그대로(원래 맛)** 추천하세요."
+                safe_items.append("- 모드: 사용자 요청 강행 (경고 무시)")
+                safety_directive = """
+**[핵심 지시: 사용자 요청 그대로 진행]**
+- 사용자가 건강 경고를 인지하고도 **원래의 맛**을 선택했습니다. (타인을 위한 요리일 수 있음)
+- 알레르기나 질병 정보를 이유로 재료를 변경하지 마세요.
+- **사용자가 요청한 음식의 오리지널 레시피**를 그대로 추천하세요."""
             
             if safe_items:
                 metadata_text = "\n\n**추가 분석:**\n" + "\n".join(safe_items)
 
-        prompt = f"""당신은 영양사이자 요리 전문가입니다. 사용자의 건강 정보와 선호도를 기반으로 레시피를 추천해주세요.
+        prompt = f"""당신은 전문 영양사이자 셰프입니다. 아래 정보를 바탕으로 레시피 3개를 추천하세요.
 {safety_directive}
 
-**사용자 정보:**
-- 성별: {'남성' if user.gender == 'M' else '여성' if user.gender == 'F' else '기타'}
-- 나이: {user.age or 30}세
-- 체중: {float(user.weight or 70.0)}kg
+**사용자 프로필:**
 - 건강 목표: {context.health_goal_label}
-- 건강 상태:{context.health_info_text}{context.today_status_text}{context.excess_warnings_text}{context.meal_type_text}
+- 기저 질환: {diseases_str}
+- 알레르기: {allergies_str}
+- 현재 상태:{context.today_status_text}{context.meal_type_text}
 
-**사용자 요청 또는 분석된 의도:**
+**요청 분석:**
 {intent_text or "특별한 요청 없음"}{metadata_text}
 
-**중요 지시사항:**
-1. 사용자의 요청에서 식감, 맛, 음식 종류 등의 선호도를 추론하세요.
-2. **부족한 영양소가 있으면, 사용자가 요청한 재료에 추가로 부족한 영양소를 보완할 수 있는 재료를 포함한 레시피를 추천하세요.**
-   예: 단백질이 부족하면 닭가슴살, 계란, 두부 등을 추가하고, 식이섬유가 부족하면 채소, 과일, 견과류 등을 추가하세요.
-3. 사용자의 발화를 그대로 반복하지 말고, 의도를 공감형 문장으로 자연스럽게 재진술하세요.
-4. 건강 목표와 선호도를 고려하여 레시피 3개를 추천하세요.
-5. 각 레시피는 제목, 설명, 예상 칼로리, 조리 시간, 난이도를 포함하세요.
+**작성 규칙:**
+1. **식감/맛 추론:** 사용자가 원하는 식감과 맛의 포인트를 파악하여 반영하세요.
+2. **영양 보완:** 부족한 영양소는 자연스러운 재료 추가로 보완하세요. (예: 단백질 부족 -> 흰살생선/콩류/살코기 등 다양화)
+3. **공감 대화:** 사용자 발화를 반복하지 말고 의도를 재진술하며 공감하세요.
+4. **JSON 응답:** 아래 형식만 반환하세요.
 
 **응답 형식 (JSON):**
 {{
-  "inferred_preference": "추론된 선호도 설명 (시스템용, 예: '고지방 고기류 선호')",
-  "health_warning": "건강 경고 또는 대안 제시 메시지 (없으면 null)",
+  "inferred_preference": "추론된 선호도 (예: '매콤하고 쫄깃한 식감 선호')",
+  "health_warning": "적용된 건강 조치 설명 (예: '대창 대신 식감이 비슷한 새송이버섯을 사용했어요.')",
   "recommendations": [
     {{
       "name": "레시피 제목",
-      "description": "간단한 설명",
+      "description": "한 줄 소개 (맛과 건강 포인트)",
       "calories": 450,
       "cooking_time": "30분",
       "difficulty": "보통",
-      "suitable_reason": "이 레시피가 적합한 이유"
-    }},
-    ...
+      "suitable_reason": "추천 이유"
+    }}
   ]
-}}
-
-JSON 형식만 반환하세요. 다른 텍스트는 포함하지 마세요."""
+}}"""
         return prompt
 
     def launch_parallel_recipe_pipeline(
@@ -235,6 +266,8 @@ JSON 형식만 반환하세요. 다른 텍스트는 포함하지 마세요."""
 
         try:
             user_for_detail = recommendation_kwargs["user"]
+            diseases_for_detail = recommendation_kwargs.get("diseases")
+            allergies_for_detail = recommendation_kwargs.get("allergies")
         except KeyError as exc:  # pragma: no cover - guardrail
             raise ValueError("recommendation_kwargs must include 'user'") from exc
 
@@ -267,7 +300,12 @@ JSON 형식만 반환하세요. 다른 텍스트는 포함하지 마세요."""
 
                 detail_results = await asyncio.gather(
                     *[
-                        self.get_recipe_detail(recipe_name=name, user=user_for_detail)
+                        self.get_recipe_detail(
+                            recipe_name=name, 
+                            user=user_for_detail,
+                            diseases=diseases_for_detail,
+                            allergies=allergies_for_detail
+                        )
                         for name in recipe_names
                     ],
                     return_exceptions=True,
@@ -345,6 +383,8 @@ JSON 형식만 반환하세요. 다른 텍스트는 포함하지 마세요."""
             user=user,
             intent_text=llm_user_intent or user_request or "특별한 요청 없음",
             context=context,
+            diseases=diseases,
+            allergies=allergies,
             intent_metadata=intent_metadata,
         )
 
@@ -980,7 +1020,9 @@ JSON 형식:
     async def get_recipe_detail(
         self,
         recipe_name: str,
-        user: User
+        user: User,
+        diseases: Optional[List[str]] = None,
+        allergies: Optional[List[str]] = None
     ) -> dict:
         """
         선택한 레시피의 상세 단계별 조리법을 제공
@@ -988,31 +1030,11 @@ JSON 형식:
         Args:
             recipe_name: 선택한 레시피 이름
             user: User 객체
+            diseases: 사용자 질병 목록
+            allergies: 사용자 알레르기 목록
         
         Returns:
-            dict: {
-                "recipe_name": 레시피 이름,
-                "intro": 레시피 소개,
-                "total_steps": 총 단계 수,
-                "estimated_time": 예상 조리 시간,
-                "ingredients": [재료 목록],
-                "steps": [
-                    {
-                        "step_number": 1,
-                        "title": "단계 제목",
-                        "description": "상세 설명",
-                        "tip": "팁 (선택사항)",
-                        "image_suggestion": "이미지 설명"
-                    },
-                    ...
-                ],
-                "nutrition_info": {
-                    "calories": 450,
-                    "protein": "35g",
-                    "carbs": "45g",
-                    "fat": "12g"
-                }
-            }
+            dict: 상세 레시피 정보
         """
         health_goal_kr = {
             "loss": "체중 감량",
@@ -1020,7 +1042,27 @@ JSON 형식:
             "gain": "체중 증가"
         }.get(user.health_goal, "체중 유지")
         
+        # 안전성 정보 구성
+        diseases_str = ", ".join(diseases) if diseases else "없음"
+        allergies_str = ", ".join(allergies) if allergies else "없음"
+        
+        safety_context = ""
+        if diseases or allergies:
+            safety_context = f"""
+**🚨 [중요: 안전성 유지 및 재료 검열]**
+이 사용자는 다음 건강 위험 요소를 가지고 있습니다:
+- 질병: {diseases_str}
+- 알레르기: {allergies_str}
+
+**필수 지침:**
+1. **[재료 검열]**: 위 질병이나 알레르기에 해로운 재료가 원래 레시피에 포함되어 있다면, **절대 재료 목록이나 조리 과정에 포함시키지 마세요.**
+2. **[안전 대체]**: 만약 레시피 이름(예: '{recipe_name}')이 위험한 재료를 암시하더라도, **무조건 안전한 대체재(버섯, 해산물, 두부 등)로 바뀐 버전**의 조리법을 작성하세요.
+   - 예: '대창 전골' -> 대창을 100% 제거하고 식감이 비슷한 '새송이 버섯'으로 대체하여 조리법 작성.
+3. **[소스/육수 주의]**: 알레르기 유발 성분은 소스나 육수, 시판 제품에도 포함되어서는 안 됩니다.
+"""
+
         prompt = f"""당신은 요리 전문가입니다. "{recipe_name}" 레시피의 상세한 단계별 조리법을 제공해주세요.
+{safety_context}
 
 **사용자 정보:**
 - 건강 목표: {health_goal_kr}

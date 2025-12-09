@@ -191,7 +191,7 @@ async def prewarm_chat_agent(
     return {"success": True, "message": "에이전트 워밍업 완료"}
 
 
-@router.post("/", response_model=ChatMessageResponse)
+@router.post("", response_model=ChatMessageResponse)
 async def handle_chat_message(
     request: ChatMessageRequest,
     background_tasks: BackgroundTasks,
