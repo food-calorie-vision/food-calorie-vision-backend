@@ -86,12 +86,14 @@ class RecipeDetailResponse(BaseModel):
     ingredients: List[RecipeIngredient] = Field(..., description="재료 목록")
     steps: List[RecipeStep] = Field(..., description="조리 단계")
     nutrition_info: NutritionInfo = Field(..., description="영양 정보")
+    total_weight_g: float = Field(250.0, description="총 중량(g)")
 
 
 class SaveRecipeRequest(BaseModel):
     """레시피 완료 후 식단 기록 요청"""
     recipe_name: str = Field(..., description="레시피 이름")
     actual_servings: float = Field(1.0, description="실제 섭취량 (인분)")
+    portion_size_g: float = Field(250.0, description="1인분 기준 중량(g)")
     meal_type: str = Field("lunch", description="식사 유형 (breakfast, lunch, dinner, snack)")
     nutrition_info: NutritionInfo = Field(..., description="영양 정보")
     ingredients: Optional[List[str]] = Field(None, description="재료 목록")
@@ -130,3 +132,4 @@ class CustomRecipeResponse(BaseModel):
     nutrition_info: NutritionInfo = Field(..., description="맞춤 영양 정보")
     estimated_time: Optional[str] = Field(None, description="예상 조리 시간")
     intro: Optional[str] = Field(None, description="조리 도입부 설명")
+    total_weight_g: float = Field(250.0, description="총 중량(g)")
